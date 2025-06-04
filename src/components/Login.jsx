@@ -40,26 +40,50 @@ export default function Login({ onLogin }) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-black to-slate-900 flex flex-col items-center justify-center relative overflow-hidden">
-      {/* Animated Background Blobs */}
-      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-        <div className="absolute -top-40 -left-40 w-[36rem] h-[36rem] bg-gradient-to-tr from-purple-500 via-cyan-400 to-transparent opacity-40 blur-3xl animate-pulse"></div>
-        <div className="absolute top-1/3 right-0 w-[30rem] h-[32rem] bg-gradient-to-tl from-cyan-400 via-purple-400 to-transparent opacity-30 blur-3xl animate-pulse"></div>
-        <div className="absolute bottom-0 left-1/4 w-[28rem] h-[28rem] bg-gradient-to-br from-purple-400 via-cyan-300 to-transparent opacity-30 blur-2xl animate-pulse"></div>
+      {/* Animated Scan Ring */}
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 flex items-center justify-center">
+        <svg
+          className="w-[60vw] h-[60vw] max-w-2xl max-h-2xl opacity-20 animate-spin-slow"
+          viewBox="0 0 600 600"
+          fill="none"
+          style={{ filter: "blur(1.5px)" }}
+        >
+          <circle
+            cx="300"
+            cy="300"
+            r="230"
+            stroke="#38bdf8"
+            strokeWidth="3"
+            strokeDasharray="30 18"
+            strokeLinecap="round"
+            opacity="0.45"
+          />
+          <circle
+            cx="300"
+            cy="300"
+            r="190"
+            stroke="#f1f5f9"
+            strokeWidth="2"
+            strokeDasharray="7 15"
+            strokeLinecap="round"
+            opacity="0.22"
+          />
+        </svg>
       </div>
 
-      {/* Content (z-10 keeps it above blobs) */}
+      {/* Login Content */}
       <div className="mb-10 flex flex-col items-center z-10">
         <div className="relative mb-2">
           <span className="absolute inset-0 flex items-center justify-center">
-            <span className="w-28 h-28 rounded-full bg-gradient-to-tr from-purple-600 via-cyan-400 to-purple-800 opacity-25 animate-ping"></span>
+            <span className="w-28 h-28 rounded-full bg-gradient-to-tr from-blue-300 via-cyan-200 to-blue-800 opacity-15 animate-ping"></span>
           </span>
           <div className="w-20 h-20 rounded-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-700 border-4 border-cyan-400 flex items-center justify-center shadow-lg relative z-10">
-            <span className="text-3xl font-extrabold tracking-wide bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent select-none">
+            <span className="text-3xl font-extrabold tracking-wide bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent select-none">
               V
             </span>
           </div>
         </div>
-        <h1 className="text-2xl font-bold tracking-wider bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent mt-2">
+        <h1 className="text-2xl font-bold tracking-wider bg-gradient-to-r from-blue-300 to-cyan-400 bg-clip-text text-transparent mt-2">
           VISTA
         </h1>
         <div className="text-slate-400 text-sm font-medium mt-1 mb-2 text-center">
@@ -102,7 +126,7 @@ export default function Login({ onLogin }) {
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 mt-2 mb-2 rounded-xl bg-gradient-to-r from-cyan-500 to-purple-500 font-bold text-white shadow-lg hover:scale-105 transition-all disabled:opacity-50"
+          className="w-full py-3 mt-2 mb-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 font-bold text-white shadow-lg hover:scale-105 transition-all disabled:opacity-50"
         >
           {loading ? (
             <span className="flex items-center justify-center gap-2">
