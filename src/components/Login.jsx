@@ -6,13 +6,12 @@ export default function Login({ onLogin }) {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // Firebase login if needed
+  // Firebase login for email/password
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      // If you have Firebase Auth here:
       const { getAuth, signInWithEmailAndPassword } = await import("firebase/auth");
       const auth = getAuth();
       const result = await signInWithEmailAndPassword(auth, email, password);
@@ -23,10 +22,33 @@ export default function Login({ onLogin }) {
     }
   };
 
+  // Google sign-in
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const { getAuth, GoogleAuthProvider, signInWithPopup } = await import("firebase/auth");
+      const auth = getAuth();
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(auth, provider);
+      onLogin(result.user);
+    } catch (err) {
+      setError("Google sign-in failed.");
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-black to-slate-900 flex flex-col items-center justify-center">
-      {/* Logo/Brand */}
-      <div className="mb-10 flex flex-col items-center">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-black to-slate-900 flex flex-col items-center justify-center relative overflow-hidden">
+      {/* Animated Background Blobs */}
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+        <div className="absolute -top-40 -left-40 w-[36rem] h-[36rem] bg-gradient-to-tr from-purple-500 via-cyan-400 to-transparent opacity-40 blur-3xl animate-pulse"></div>
+        <div className="absolute top-1/3 right-0 w-[30rem] h-[32rem] bg-gradient-to-tl from-cyan-400 via-purple-400 to-transparent opacity-30 blur-3xl animate-pulse"></div>
+        <div className="absolute bottom-0 left-1/4 w-[28rem] h-[28rem] bg-gradient-to-br from-purple-400 via-cyan-300 to-transparent opacity-30 blur-2xl animate-pulse"></div>
+      </div>
+
+      {/* Content (z-10 keeps it above blobs) */}
+      <div className="mb-10 flex flex-col items-center z-10">
         <div className="relative mb-2">
           <span className="absolute inset-0 flex items-center justify-center">
             <span className="w-28 h-28 rounded-full bg-gradient-to-tr from-purple-600 via-cyan-400 to-purple-800 opacity-25 animate-ping"></span>
@@ -48,7 +70,7 @@ export default function Login({ onLogin }) {
       {/* Login Card */}
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm rounded-2xl shadow-2xl bg-slate-900 bg-opacity-80 border border-slate-800 p-8 flex flex-col"
+        className="w-full max-w-sm rounded-2xl shadow-2xl bg-slate-900 bg-opacity-80 border border-slate-800 p-8 flex flex-col z-10"
       >
         <h2 className="text-xl font-bold text-cyan-300 mb-6 text-center">
           Sign in to your account
@@ -80,7 +102,7 @@ export default function Login({ onLogin }) {
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 mt-2 mb-1 rounded-xl bg-gradient-to-r from-cyan-500 to-purple-500 font-bold text-white shadow-lg hover:scale-105 transition-all disabled:opacity-50"
+          className="w-full py-3 mt-2 mb-2 rounded-xl bg-gradient-to-r from-cyan-500 to-purple-500 font-bold text-white shadow-lg hover:scale-105 transition-all disabled:opacity-50"
         >
           {loading ? (
             <span className="flex items-center justify-center gap-2">
@@ -105,9 +127,27 @@ export default function Login({ onLogin }) {
             "Sign In"
           )}
         </button>
+
+        {/* Google Auth Button */}
+        <button
+          type="button"
+          onClick={handleGoogleSignIn}
+          disabled={loading}
+          className="w-full py-3 mb-1 rounded-xl bg-white text-slate-800 font-bold shadow-md hover:bg-slate-100 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 48 48">
+            <g>
+              <path fill="#4285F4" d="M44.5 20H24v8.5h11.7C34.7 32.4 30.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 6 .9 8.2 2.7l6.1-6.1C34.3 6.3 29.5 4.5 24 4.5 12.7 4.5 3.5 13.7 3.5 25S12.7 45.5 24 45.5 44.5 36.3 44.5 25c0-1.3-.1-2.7-.4-4z"/>
+              <path fill="#34A853" d="M6.3 14.8l7 5.1C15.4 17.1 19.4 14.5 24 14.5c3.1 0 6 .9 8.2 2.7l6.1-6.1C34.3 6.3 29.5 4.5 24 4.5c-6.6 0-12 5.4-12 12 0 1.4.2 2.7.3 4.3z"/>
+              <path fill="#FBBC05" d="M24 44.5c5.2 0 10-1.8 13.7-4.9l-6.3-5.2c-2.2 1.5-5.2 2.6-7.4 2.6-6.2 0-11.4-4.2-13.3-10H6.3C8.9 38 15.8 44.5 24 44.5z"/>
+              <path fill="#EA4335" d="M44.5 25c0-1.3-.1-2.7-.4-4H24v8.5h11.7c-1.1 3-4.1 6.1-11.7 6.1-6.2 0-11.4-4.2-13.3-10H6.3C8.9 38 15.8 44.5 24 44.5c5.2 0 10-1.8 13.7-4.9l-6.3-5.2z"/>
+            </g>
+          </svg>
+          {loading ? "Processing..." : "Sign in with Google"}
+        </button>
       </form>
 
-      <footer className="w-full text-center text-xs text-slate-500 py-4 mt-8">
+      <footer className="w-full text-center text-xs text-slate-500 py-4 mt-8 z-10">
         HIPAA-compliant | VISTA v1.0
       </footer>
     </div>
