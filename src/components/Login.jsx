@@ -1,10 +1,92 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // Glow ring state
+  const [mouse, setMouse] = useState({ x: 0, y: 0, inside: false });
+  const svgRef = useRef();
+
+  // Size and position constants
+  const SVG_SIZE = 600;
+  const CENTER = SVG_SIZE / 2;
+  const OUTER_RADIUS = 230;
+  const RING_WIDTH = 30; // px
+  const INNER_RADIUS = OUTER_RADIUS - RING_WIDTH;
+  const GLOW_WIDTH_DEG = 44; // how "wide" the arc glow is
+  const GLOW_MAX_OPACITY = 0.65;
+
+  // Track mouse over SVG
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      const rect = svgRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      setMouse((m) => ({ ...m, x, y }));
+    };
+    const handleMouseLeave = () => setMouse((m) => ({ ...m, inside: false }));
+
+    const svg = svgRef.current;
+    if (svg) {
+      svg.addEventListener("mousemove", handleMouseMove);
+      svg.addEventListener("mouseenter", () =>
+        setMouse((m) => ({ ...m, inside: true }))
+      );
+      svg.addEventListener("mouseleave", handleMouseLeave);
+    }
+    return () => {
+      if (svg) {
+        svg.removeEventListener("mousemove", handleMouseMove);
+        svg.removeEventListener("mouseenter", () =>
+          setMouse((m) => ({ ...m, inside: true }))
+        );
+        svg.removeEventListener("mouseleave", handleMouseLeave);
+      }
+    };
+  }, []);
+
+  // Calculate the nearest angle and glow intensity
+  let glow = null;
+  if (mouse.inside && svgRef.current) {
+    const dx = mouse.x - CENTER;
+    const dy = mouse.y - CENTER;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // Calculate the angle in degrees (0 at top, clockwise)
+    let angle = (Math.atan2(dx, -dy) * 180) / Math.PI;
+    if (angle < 0) angle += 360;
+
+    // How close is the cursor to the ring?
+    const ringDist = Math.abs(dist - OUTER_RADIUS);
+    // Glow fades out after 50px away from the ring
+    const intensity = Math.max(0, 1 - ringDist / 50);
+
+    if (intensity > 0.05) {
+      glow = { angle, opacity: intensity * GLOW_MAX_OPACITY };
+    }
+  }
+
+  // SVG arc path for the glow
+  function arcPath(cx, cy, r, startAngle, endAngle) {
+    // convert degrees to radians
+    const rad = (deg) => (deg * Math.PI) / 180;
+    const start = {
+      x: cx + r * Math.sin(rad(startAngle)),
+      y: cy - r * Math.cos(rad(startAngle)),
+    };
+    const end = {
+      x: cx + r * Math.sin(rad(endAngle)),
+      y: cy - r * Math.cos(rad(endAngle)),
+    };
+    const largeArc = endAngle - startAngle <= 180 ? 0 : 1;
+    return [
+      `M ${start.x} ${start.y}`,
+      `A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y}`,
+    ].join(" ");
+  }
 
   // Firebase login for email/password
   const handleSubmit = async (e) => {
@@ -40,34 +122,56 @@ export default function Login({ onLogin }) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-black to-slate-900 flex flex-col items-center justify-center relative overflow-hidden">
-      {/* Animated Scan Ring */}
-      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 flex items-center justify-center">
+      {/* Interactive Scan Ring */}
+      <div className="pointer-events-auto fixed inset-0 z-0 flex items-center justify-center select-none">
         <svg
-          className="w-[60vw] h-[60vw] max-w-2xl max-h-2xl opacity-20 animate-spin-slow"
-          viewBox="0 0 600 600"
-          fill="none"
-          style={{ filter: "blur(1.5px)" }}
+          ref={svgRef}
+          width={SVG_SIZE}
+          height={SVG_SIZE}
+          viewBox={`0 0 ${SVG_SIZE} ${SVG_SIZE}`}
+          className="block max-w-[90vw] max-h-[90vh]"
         >
+          {/* Outer subtle ring */}
           <circle
-            cx="300"
-            cy="300"
-            r="230"
+            cx={CENTER}
+            cy={CENTER}
+            r={OUTER_RADIUS}
             stroke="#38bdf8"
             strokeWidth="3"
-            strokeDasharray="30 18"
-            strokeLinecap="round"
-            opacity="0.45"
+            opacity="0.12"
+            fill="none"
           />
+          {/* Inner subtle ring */}
           <circle
-            cx="300"
-            cy="300"
-            r="190"
+            cx={CENTER}
+            cy={CENTER}
+            r={OUTER_RADIUS - 25}
             stroke="#f1f5f9"
             strokeWidth="2"
-            strokeDasharray="7 15"
-            strokeLinecap="round"
-            opacity="0.22"
+            opacity="0.07"
+            fill="none"
           />
+          {/* Dynamic Glow Arc */}
+          {glow && (
+            <path
+              d={arcPath(
+                CENTER,
+                CENTER,
+                OUTER_RADIUS,
+                glow.angle - GLOW_WIDTH_DEG / 2,
+                glow.angle + GLOW_WIDTH_DEG / 2
+              )}
+              stroke="#38bdf8"
+              strokeWidth="20"
+              strokeLinecap="round"
+              opacity={glow.opacity}
+              style={{
+                filter: "blur(7px) drop-shadow(0 0 18px #38bdf8cc)",
+                transition: "opacity 0.1s",
+              }}
+              fill="none"
+            />
+          )}
         </svg>
       </div>
 
