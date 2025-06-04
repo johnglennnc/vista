@@ -16,6 +16,7 @@ const cors = require("cors")({
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
+const JSZip = require("jszip");
 
 admin.initializeApp();
 
@@ -177,13 +178,67 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
     await bucket.file(filePath).download({ destination: tempFilePath });
     console.log(`Downloaded file to ${tempFilePath}`);
 
-    // 2. (TODO) Call your AI analysis here! Replace this dummy function with your real pipeline.
-    const analysisResult = await runAIAnalysis(tempFilePath);
+    // 2. Unzip and call OpenAI Vision for each PNG slice
+    const zipBuffer = fs.readFileSync(tempFilePath);
+    const zip = await JSZip.loadAsync(zipBuffer);
+
+    // -- Only instantiate OpenAI after checking the secret
+    const apiKey = OPENAI_API_KEY.value();
+    if (!apiKey) {
+      console.error("OPENAI_API_KEY.value() is falsy! (not set, empty, or not injected)");
+      throw new Error("Server misconfiguration: OPENAI_API_KEY is missing");
+    }
+
+    const openai = new OpenAI({ apiKey });
+
+    const results = [];
+    const files = Object.keys(zip.files);
+
+    for (let i = 0; i < files.length; i++) {
+      const filename = files[i];
+      if (zip.files[filename].dir) continue;
+      // This assumes slices are PNGs. If DICOM, you need to convert.
+      const fileData = await zip.files[filename].async("base64");
+      try {
+        const gptRes = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a radiologist AI. Analyze this CT slice and identify any tumors, lesions, or anomalies. Be concise and clinical."
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:image/png;base64,${fileData}`
+                  }
+                }
+              ]
+            }
+          ],
+          temperature: 0.3,
+        });
+        const result = gptRes.choices[0].message.content;
+        results.push({
+          filename,
+          result,
+        });
+      } catch (err) {
+        results.push({
+          filename,
+          result: "OpenAI Vision Error: " + err.message,
+        });
+      }
+    }
 
     // 3. Save analysis result to Firestore (or wherever you want)
     await admin.firestore().collection("scan-results").add({
       filename: path.basename(filePath),
-      result: analysisResult,
+      results,
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -198,8 +253,3 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
   }
 );
 
-// Dummy function. Replace with real AI logic!
-async function runAIAnalysis(tempFilePath) {
-  // Simulate analysis.
-  return { summary: "No abnormal findings." };
-}

@@ -1,13 +1,46 @@
 import React, { useState, useRef, useEffect } from "react";
+import dicomParser from "dicom-parser";
 import JSZip from "jszip";
 import { useDropzone } from "react-dropzone";
 import { ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "../firebase/config";
-import { getAuth } from "firebase/auth";
 import { getFirestore, collection, query, where, onSnapshot } from "firebase/firestore";
 import { app } from "../firebase/config";
 
 const db = getFirestore(app);
+
+// Helper: Convert DICOM file to base64 PNG (grayscale only, basic)
+async function dicomFileToPng(file) {
+  const buffer = await file.arrayBuffer();
+  const dataSet = dicomParser.parseDicom(new Uint8Array(buffer));
+  const pixelDataElement = dataSet.elements.x7fe00010;
+  if (!pixelDataElement) throw new Error("No pixel data found in DICOM.");
+  const pixelData = new Uint8Array(
+    dataSet.byteArray.buffer,
+    pixelDataElement.dataOffset,
+    pixelDataElement.length
+  );
+  const rows = dataSet.uint16("x00280010");
+  const cols = dataSet.uint16("x00280011");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = cols;
+  canvas.height = rows;
+  const ctx = canvas.getContext("2d");
+  const imgData = ctx.createImageData(cols, rows);
+
+  for (let i = 0; i < pixelData.length; i++) {
+    const val = pixelData[i];
+    imgData.data[i * 4 + 0] = val;
+    imgData.data[i * 4 + 1] = val;
+    imgData.data[i * 4 + 2] = val;
+    imgData.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  // Return base64 PNG (no data:image/png;base64, prefix)
+  return canvas.toDataURL("image/png").split(",")[1];
+}
 
 function UploadScan() {
   const [status, setStatus] = useState("Idle");
@@ -34,7 +67,7 @@ function UploadScan() {
     unsubscribeRef.current = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
         const doc = snapshot.docs[0];
-        setAiResult(doc.data().result);
+        setAiResult(doc.data().results || doc.data().result);
         setStatus("✅ AI analysis result received.");
         unsubscribeRef.current();
       }
@@ -43,21 +76,27 @@ function UploadScan() {
 
   const onDrop = async (acceptedFiles) => {
     setUploading(true);
-    setStatus("🗜️ Zipping DICOM slices...");
+    setStatus("🖼️ Converting DICOM slices to PNG...");
     setProgress(0);
     setAiResult(null);
 
     try {
-      // Zip the slices for storage
+      // Convert DICOMs to PNGs
       const zip = new JSZip();
-      acceptedFiles.forEach((file, idx) => {
-        zip.file(`slice_${idx + 1}.dcm`, file);
-      });
+      for (let i = 0; i < acceptedFiles.length; i++) {
+        const file = acceptedFiles[i];
+        const pngBase64 = await dicomFileToPng(file);
+        // Store as .png in zip (convert base64 to Uint8Array)
+        zip.file(
+          file.name.replace(/\.dcm$/, ".png"),
+          Uint8Array.from(atob(pngBase64), (c) => c.charCodeAt(0))
+        );
+        setProgress(Math.round(((i + 1) / acceptedFiles.length) * 50)); // 50% for conversion
+      }
 
+      setStatus("☁️ Zipping and uploading PNGs to Firebase Storage...");
       const zipBlob = await zip.generateAsync({ type: "blob" });
       const generatedFilename = `scan_${Date.now()}.zip`;
-
-      setStatus("☁️ Uploading ZIP to Firebase Storage...");
 
       // Upload ZIP to Firebase Storage (temp-uploads)
       const zipRef = ref(storage, `temp-uploads/${generatedFilename}`);
@@ -67,9 +106,8 @@ function UploadScan() {
         uploadTask.on(
           "state_changed",
           (snapshot) => {
-            const percent = Math.round(
-              (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-            );
+            const percent =
+              50 + Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 50);
             setProgress(percent);
             setStatus(`☁️ Uploading ZIP to Firebase Storage... ${percent}%`);
           },
@@ -89,19 +127,8 @@ function UploadScan() {
       // Start polling Firestore for analysis result by filename
       pollForResult(generatedFilename);
     } catch (err) {
-      let details = "";
-      if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
-        details =
-          "\nNetwork or CORS error — check browser dev tools > Network tab and function logs for details.";
-      } else if (err.stack) {
-        details = `\nStack:\n${err.stack}`;
-      } else {
-        details = "\n" + JSON.stringify(err, null, 2);
-      }
-      setStatus(
-        `❌ Upload or analysis failed: ${err.message || err}\n${details}`
-      );
-      console.error("Full error details:", err);
+      setStatus(`❌ Upload or conversion failed: ${err.message}`);
+      setUploading(false);
     }
     setUploading(false);
   };
@@ -130,7 +157,7 @@ function UploadScan() {
 
       {uploading && (
         <div className="mt-4 text-sm text-blue-300">
-          Uploading: {progress}%<br />
+          Progress: {progress}%<br />
           <div className="w-full h-2 bg-gray-700 rounded mt-2">
             <div
               className="h-2 bg-blue-500 rounded"
