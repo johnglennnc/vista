@@ -1,6 +1,7 @@
 // src/App.js
 import React, { useEffect, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
+import Login from "./components/Login"; // Only Login stays imported
 import { app } from "./firebase/config";
 
 // --- UploadScan Component (Inline) ---
@@ -254,7 +255,6 @@ function AnalyzeScan() {
 }
 
 // --- Main App ---
-import Login from "./components/Login"; // Only Login stays imported
 
 const auth = getAuth(app);
 
