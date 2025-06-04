@@ -1,5 +1,5 @@
 const { onRequest } = require("firebase-functions/v2/https");
-const { onObjectDeleted } = require("firebase-functions/v2/storage");
+const { onObjectDeleted, onObjectFinalized } = require("firebase-functions/v2/storage");
 const { defineSecret } = require("firebase-functions/params");
 const OpenAI = require("openai");
 const admin = require("firebase-admin");
@@ -13,6 +13,9 @@ const cors = require("cors")({
   allowedHeaders: ["Authorization", "Content-Type", "x-goog-meta-foo"],
   credentials: true
 });
+const path = require("path");
+const os = require("os");
+const fs = require("fs");
 
 admin.initializeApp();
 
@@ -153,3 +156,50 @@ exports.deleteSliceImage = onObjectDeleted(
     return null;
   }
 );
+
+// ==== analyzeAndAutoDelete: Analyze uploaded ZIP in temp-uploads, then delete ====
+exports.analyzeAndAutoDelete = onObjectFinalized(
+  { bucket: "vista-lifeimaging-ct-data", region: "us-central1" },
+  async (event) => {
+    const file = event.data;
+    const filePath = file.name;
+
+    // Only process ZIPs in "temp-uploads/"
+    if (!filePath.startsWith("temp-uploads/") || !filePath.endsWith(".zip")) {
+      console.log("Ignoring file:", filePath);
+      return;
+    }
+
+    const bucket = admin.storage().bucket(file.bucket);
+    const tempFilePath = path.join(os.tmpdir(), path.basename(filePath));
+
+    // 1. Download file
+    await bucket.file(filePath).download({ destination: tempFilePath });
+    console.log(`Downloaded file to ${tempFilePath}`);
+
+    // 2. (TODO) Call your AI analysis here! Replace this dummy function with your real pipeline.
+    const analysisResult = await runAIAnalysis(tempFilePath);
+
+    // 3. Save analysis result to Firestore (or wherever you want)
+    await admin.firestore().collection("scan-results").add({
+      filename: path.basename(filePath),
+      result: analysisResult,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // 4. Delete file from Storage
+    await bucket.file(filePath).delete();
+    console.log("Deleted file:", filePath);
+
+    // 5. Clean up temp file
+    fs.unlinkSync(tempFilePath);
+
+    return null;
+  }
+);
+
+// Dummy function. Replace with real AI logic!
+async function runAIAnalysis(tempFilePath) {
+  // Simulate analysis.
+  return { summary: "No abnormal findings." };
+}
