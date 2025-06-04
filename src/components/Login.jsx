@@ -16,34 +16,41 @@ export default function Login({ onLogin }) {
   const OUTER_RADIUS = 230;
   const RING_WIDTH = 30; // px
   const INNER_RADIUS = OUTER_RADIUS - RING_WIDTH;
-  const GLOW_WIDTH_DEG = 44; // how "wide" the arc glow is
+  const GLOW_WIDTH_DEG = 44;
   const GLOW_MAX_OPACITY = 0.65;
 
-  // Track mouse over SVG
+  // Track mouse over SVG (even under content column)
   useEffect(() => {
-    const handleMouseMove = (e) => {
+    function handleMove(e) {
+      // Get bounding rect of svg
       const rect = svgRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      setMouse((m) => ({ ...m, x, y }));
-    };
-    const handleMouseLeave = () => setMouse((m) => ({ ...m, inside: false }));
+      let x, y;
+      if (e.touches && e.touches.length > 0) {
+        x = e.touches[0].clientX - rect.left;
+        y = e.touches[0].clientY - rect.top;
+      } else {
+        x = e.clientX - rect.left;
+        y = e.clientY - rect.top;
+      }
+      setMouse((m) => ({ ...m, x, y, inside: true }));
+    }
+    function handleLeave() {
+      setMouse((m) => ({ ...m, inside: false }));
+    }
 
     const svg = svgRef.current;
     if (svg) {
-      svg.addEventListener("mousemove", handleMouseMove);
-      svg.addEventListener("mouseenter", () =>
-        setMouse((m) => ({ ...m, inside: true }))
-      );
-      svg.addEventListener("mouseleave", handleMouseLeave);
+      svg.addEventListener("mousemove", handleMove);
+      svg.addEventListener("mouseleave", handleLeave);
+      svg.addEventListener("touchmove", handleMove);
+      svg.addEventListener("touchend", handleLeave);
     }
     return () => {
       if (svg) {
-        svg.removeEventListener("mousemove", handleMouseMove);
-        svg.removeEventListener("mouseenter", () =>
-          setMouse((m) => ({ ...m, inside: true }))
-        );
-        svg.removeEventListener("mouseleave", handleMouseLeave);
+        svg.removeEventListener("mousemove", handleMove);
+        svg.removeEventListener("mouseleave", handleLeave);
+        svg.removeEventListener("touchmove", handleMove);
+        svg.removeEventListener("touchend", handleLeave);
       }
     };
   }, []);
@@ -55,13 +62,10 @@ export default function Login({ onLogin }) {
     const dy = mouse.y - CENTER;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    // Calculate the angle in degrees (0 at top, clockwise)
     let angle = (Math.atan2(dx, -dy) * 180) / Math.PI;
     if (angle < 0) angle += 360;
 
-    // How close is the cursor to the ring?
-    const ringDist = Math.abs(dist - OUTER_RADIUS);
-    // Glow fades out after 50px away from the ring
+    const ringDist = Math.abs(dist - (OUTER_RADIUS - RING_WIDTH / 2));
     const intensity = Math.max(0, 1 - ringDist / 50);
 
     if (intensity > 0.05) {
@@ -69,22 +73,35 @@ export default function Login({ onLogin }) {
     }
   }
 
-  // SVG arc path for the glow
-  function arcPath(cx, cy, r, startAngle, endAngle) {
+  // SVG "donut wedge" for the glow (full ring width)
+  function arcGlowPath(cx, cy, rOuter, rInner, startAngle, endAngle) {
     // convert degrees to radians
     const rad = (deg) => (deg * Math.PI) / 180;
-    const start = {
-      x: cx + r * Math.sin(rad(startAngle)),
-      y: cy - r * Math.cos(rad(startAngle)),
+    // Outer arc
+    const startOuter = {
+      x: cx + rOuter * Math.sin(rad(startAngle)),
+      y: cy - rOuter * Math.cos(rad(startAngle)),
     };
-    const end = {
-      x: cx + r * Math.sin(rad(endAngle)),
-      y: cy - r * Math.cos(rad(endAngle)),
+    const endOuter = {
+      x: cx + rOuter * Math.sin(rad(endAngle)),
+      y: cy - rOuter * Math.cos(rad(endAngle)),
+    };
+    // Inner arc (reverse direction)
+    const startInner = {
+      x: cx + rInner * Math.sin(rad(endAngle)),
+      y: cy - rInner * Math.cos(rad(endAngle)),
+    };
+    const endInner = {
+      x: cx + rInner * Math.sin(rad(startAngle)),
+      y: cy - rInner * Math.cos(rad(startAngle)),
     };
     const largeArc = endAngle - startAngle <= 180 ? 0 : 1;
     return [
-      `M ${start.x} ${start.y}`,
-      `A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y}`,
+      `M ${startOuter.x} ${startOuter.y}`,
+      `A ${rOuter} ${rOuter} 0 ${largeArc} 1 ${endOuter.x} ${endOuter.y}`,
+      `L ${startInner.x} ${startInner.y}`,
+      `A ${rInner} ${rInner} 0 ${largeArc} 0 ${endInner.x} ${endInner.y}`,
+      "Z",
     ].join(" ");
   }
 
@@ -122,8 +139,11 @@ export default function Login({ onLogin }) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-black to-slate-900 flex flex-col items-center justify-center relative overflow-hidden">
-      {/* Interactive Scan Ring */}
-      <div className="pointer-events-auto fixed inset-0 z-0 flex items-center justify-center select-none">
+      {/* Interactive Scan Ring (full-screen, under content column) */}
+      <div
+        className="pointer-events-none fixed inset-0 z-0 flex items-center justify-center select-none"
+        style={{ touchAction: "none" }}
+      >
         <svg
           ref={svgRef}
           width={SVG_SIZE}
@@ -138,7 +158,7 @@ export default function Login({ onLogin }) {
             r={OUTER_RADIUS}
             stroke="#38bdf8"
             strokeWidth="3"
-            opacity="0.12"
+            opacity="0.11"
             fill="none"
           />
           {/* Inner subtle ring */}
@@ -151,31 +171,37 @@ export default function Login({ onLogin }) {
             opacity="0.07"
             fill="none"
           />
-          {/* Dynamic Glow Arc */}
+          {/* Dynamic Glow Donut Wedge */}
           {glow && (
             <path
-              d={arcPath(
+              d={arcGlowPath(
                 CENTER,
                 CENTER,
                 OUTER_RADIUS,
+                INNER_RADIUS,
                 glow.angle - GLOW_WIDTH_DEG / 2,
                 glow.angle + GLOW_WIDTH_DEG / 2
               )}
-              stroke="#38bdf8"
-              strokeWidth="20"
-              strokeLinecap="round"
+              fill="url(#glowGradient)"
               opacity={glow.opacity}
               style={{
-                filter: "blur(7px) drop-shadow(0 0 18px #38bdf8cc)",
+                filter: "blur(8px) drop-shadow(0 0 28px #38bdf8cc)",
                 transition: "opacity 0.1s",
               }}
-              fill="none"
             />
           )}
+          {/* Gradient for glow */}
+          <defs>
+            <radialGradient id="glowGradient" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.7" />
+              <stop offset="90%" stopColor="#38bdf8" stopOpacity="0.1" />
+              <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
+            </radialGradient>
+          </defs>
         </svg>
       </div>
 
-      {/* Login Content */}
+      {/* Login Content (always above scan ring) */}
       <div className="mb-10 flex flex-col items-center z-10">
         <div className="relative mb-2">
           <span className="absolute inset-0 flex items-center justify-center">
