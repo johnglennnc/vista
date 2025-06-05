@@ -69,9 +69,16 @@ function UploadScan() {
 
       const zipBlob = await zip.generateAsync({ type: "blob" });
       const generatedFilename = `scan_${uuidv4()}.zip`;
-      const zipRef = ref(storage, `temp-uploads/${generatedFilename}`);
+      const auth = getAuth();
+const user = auth.currentUser;
+const zipRef = ref(storage, `temp-uploads/${generatedFilename}`);
 
-      const uploadTask = uploadBytesResumable(zipRef, zipBlob);
+const uploadTask = uploadBytesResumable(zipRef, zipBlob, {
+  customMetadata: {
+    userId: user ? user.uid : "unknown",
+  }
+});
+
 
       await new Promise((resolve, reject) => {
         uploadTask.on(

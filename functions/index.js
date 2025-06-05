@@ -153,6 +153,10 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
     const tempZipPath = path.join(os.tmpdir(), path.basename(filePath));
     await bucket.file(filePath).download({ destination: tempZipPath });
     console.log(`✅ Downloaded ZIP: ${tempZipPath}`);
+    const [fileMetadata] = await bucket.file(filePath).getMetadata();
+
+    const userId = fileMetadata.metadata && fileMetadata.metadata.userId ? fileMetadata.metadata.userId : "unknown";
+
 
     const zipBuffer = fs.readFileSync(tempZipPath);
     const zip = await JSZip.loadAsync(zipBuffer);
@@ -165,7 +169,6 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
     const openai = new OpenAI({ apiKey });
 
     const scanId = path.basename(filePath, ".zip");
-    const userId = "unknown"; // Optional: populate later
 
     for (const filename of files) {
       const fileRef = zip.files[filename];
@@ -241,13 +244,15 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    await db.collection("scans").add({
-      scanId,
-      userId,
-      slices: slicePaths,
-      aiAnalysis: results,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+   await db.collection("scans").add({
+  scanId,
+  userId,
+  status: "processed",
+  slices: slicePaths,
+  aiAnalysis: results,
+  createdAt: admin.firestore.FieldValue.serverTimestamp(),
+});
+
 
     await bucket.file(filePath).delete();
     fs.unlinkSync(tempZipPath);
