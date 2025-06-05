@@ -9,11 +9,6 @@ function classNames(...classes) {
   return classes.filter(Boolean).join(" ");
 }
 
-const mockRecentScans = [
-  { id: 1, patient: "Smith", date: "2025-06-04", status: "Complete" },
-  { id: 2, patient: "Johnson", date: "2025-06-03", status: "Analyzing" },
-];
-
 function UploadScan() {
   const fileInputRef = React.useRef(null);
   const [dragActive, setDragActive] = useState(false);
@@ -128,131 +123,152 @@ function UploadScan() {
           </div>
         )}
       </div>
-      {/* Recent Scans */}
-      <div className="mt-12">
-        <h3 className="text-lg font-bold mb-4 text-cyan-300">Recent Scans</h3>
-        <div className="overflow-x-auto rounded-xl border border-slate-800 shadow">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="bg-slate-800 text-slate-300">
-                <th className="px-4 py-2 text-left">Patient</th>
-                <th className="px-4 py-2 text-left">Date</th>
-                <th className="px-4 py-2 text-left">Status</th>
-                <th className="px-4 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {mockRecentScans.map((scan) => (
-                <tr
-                  key={scan.id}
-                  className="border-t border-slate-800 hover:bg-slate-800 transition"
-                >
-                  <td className="px-4 py-2 font-semibold">{scan.patient}</td>
-                  <td className="px-4 py-2">{scan.date}</td>
-                  <td className="px-4 py-2">
-                    <span
-                      className={classNames(
-                        "px-3 py-1 rounded-full font-medium text-xs",
-                        scan.status === "Complete"
-                          ? "bg-green-900 text-green-400 border border-green-500"
-                          : "bg-yellow-900 text-yellow-400 border border-yellow-600 animate-pulse"
-                      )}
-                    >
-                      {scan.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-right">
-                    <button className="text-cyan-300 hover:underline">View</button>
-                  </td>
-                </tr>
-              ))}
-              {mockRecentScans.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="text-slate-500 px-4 py-6 text-center">
-                    No scans uploaded yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      
     </div>
   );
 }
 
 // --- AnalyzeScan Component (Inline) ---
-const mockSlices = Array.from({ length: 5 }, (_, i) => ({
-  id: i + 1,
-  sliceNumber: i + 1,
-  findings:
-    i === 2
-      ? ["Suspicious nodule detected on this slice."]
-      : ["No abnormalities detected."],
-}));
 
 function AnalyzeScan() {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const slice = mockSlices[currentIndex];
+  const [scans, setScans] = useState([]);
+  const [selectedScanId, setSelectedScanId] = useState(null);
+  const [analysisResult, setAnalysisResult] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const prevSlice = () => setCurrentIndex((i) => Math.max(i - 1, 0));
-  const nextSlice = () =>
-    setCurrentIndex((i) => Math.min(i + 1, mockSlices.length - 1));
+  useEffect(() => {
+    const fetchScans = async () => {
+      const auth = getAuth();
+      const user = auth.currentUser;
+      if (!user) return;
+
+      const scansRef = collection(db, "scans");
+      const q = query(
+        scansRef,
+        where("status", "==", "processed"),
+        where("userId", "==", user.uid)
+      );
+      const querySnapshot = await getDocs(q);
+      const scanList = querySnapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+        .filter(scan => Array.isArray(scan.slices) && scan.slices.length > 0);
+
+      setScans(scanList);
+    };
+
+    fetchScans();
+  }, []);
+
+  const blobToBase64 = (blob) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  const handleAnalyze = async () => {
+    if (!selectedScanId) {
+      alert("Please select a scan first.");
+      return;
+    }
+
+    const scan = scans.find(s => s.id === selectedScanId);
+    if (!scan?.slices?.length) {
+      alert("No slices found for this scan.");
+      return;
+    }
+
+    setAnalysisResult("🔄 Downloading and encoding slices...");
+    setLoading(true);
+
+    try {
+      const sliceFiles = [];
+      for (const storagePath of scan.slices) {
+        const url = await getDownloadURL(storageRef(storage, storagePath));
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const base64 = await blobToBase64(blob);
+        sliceFiles.push({ name: storagePath.split('/').pop(), base64 });
+      }
+
+      setAnalysisResult("🔄 Sending to AI for analysis...");
+
+      const auth = getAuth();
+      const user = auth.currentUser;
+      const idToken = await user.getIdToken();
+
+      const res = await fetch(
+        "https://us-central1-vista-lifeimaging.cloudfunctions.net/api/analyzeSlices",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({ slices: sliceFiles }),
+        }
+      );
+      const data = await res.json();
+
+      setAnalysisResult(
+        data.results
+          ? JSON.stringify(data.results, null, 2)
+          : data.error
+            ? `❌ Error: ${data.error}`
+            : "No result"
+      );
+
+      const scanDoc = doc(db, "scans", selectedScanId);
+      await updateDoc(scanDoc, { aiAnalysis: data.results });
+
+      setLoading(false);
+    } catch (err) {
+      setAnalysisResult(`❌ Error: ${err.message}`);
+      setLoading(false);
+      console.error(err);
+    }
+  };
 
   return (
-    <div className="flex flex-col md:flex-row gap-10">
-      {/* Scan viewer */}
-      <div className="flex-1 flex flex-col items-center bg-slate-800 rounded-2xl shadow-lg p-8">
-        <div className="text-slate-400 font-medium mb-2">
-          Slice {slice.sliceNumber} / {mockSlices.length}
+    <div className="border border-gray-700 rounded p-6 bg-gray-800">
+      <h2 className="text-xl font-semibold mb-4">Analyze CT Scan</h2>
+
+      <select
+        className="bg-gray-900 text-white px-4 py-2 rounded mb-4 w-full"
+        onChange={(e) => setSelectedScanId(e.target.value)}
+        defaultValue=""
+        disabled={loading}
+      >
+        <option value="" disabled>Select a scan...</option>
+        {scans.map(scan => (
+          <option key={scan.id} value={scan.id}>
+            {scan.scanId || scan.id}
+          </option>
+        ))}
+      </select>
+
+      <button
+        onClick={handleAnalyze}
+        className={`px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded text-white mb-4 ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
+        disabled={loading}
+      >
+        {loading ? "Running AI Analysis..." : "Run AI Analysis"}
+      </button>
+
+      {analysisResult && (
+        <div className="mt-4 p-4 bg-gray-900 rounded text-green-400 whitespace-pre-line">
+          {analysisResult}
         </div>
-        <div className="w-72 h-72 rounded-xl bg-gradient-to-br from-slate-900 to-slate-700 flex items-center justify-center shadow-md border-2 border-cyan-700 mb-5">
-          <span className="text-5xl text-cyan-300 opacity-30 select-none">🩻</span>
-        </div>
-        <div className="flex gap-4">
-          <button
-            onClick={prevSlice}
-            disabled={currentIndex === 0}
-            className="px-4 py-2 rounded-lg font-semibold bg-slate-700 hover:bg-slate-600 disabled:bg-slate-900 disabled:opacity-30"
-          >
-            Prev
-          </button>
-          <button
-            onClick={nextSlice}
-            disabled={currentIndex === mockSlices.length - 1}
-            className="px-4 py-2 rounded-lg font-semibold bg-slate-700 hover:bg-slate-600 disabled:bg-slate-900 disabled:opacity-30"
-          >
-            Next
-          </button>
-        </div>
-      </div>
-      {/* Findings panel */}
-      <div className="w-full md:w-96">
-        <h3 className="text-lg font-bold text-cyan-300 mb-3">AI Findings</h3>
-        <div className="rounded-xl bg-slate-900 border border-slate-700 shadow-lg p-6 min-h-[160px]">
-          {slice.findings.map((finding, i) => (
-            <div
-              key={i}
-              className={
-                "mb-2 text-base " +
-                (finding.includes("Suspicious")
-                  ? "text-yellow-400 font-semibold"
-                  : "text-green-400")
-              }
-            >
-              {finding}
-            </div>
-          ))}
-        </div>
-        <div className="mt-6">
-          <button className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-purple-500 font-bold text-white shadow-lg hover:scale-105 transition">
-            Download Report (PDF)
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
+
 
 // --- Main App ---
 
