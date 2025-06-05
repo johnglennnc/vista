@@ -2,6 +2,17 @@
 import React, { useEffect, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import Login from "./components/Login"; // Only Login stays imported
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  doc,
+  updateDoc
+} from "firebase/firestore";
+
+import { getDownloadURL, ref as storageRef } from "firebase/storage";
+import { db, storage } from "./firebase/config";
 import { app } from "./firebase/config";
 
 // --- UploadScan Component (Inline) ---
