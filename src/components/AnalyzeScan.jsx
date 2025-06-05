@@ -12,17 +12,21 @@ function AnalyzeScan() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const fetchScans = async () => {
-      const querySnapshot = await getDocs(collection(db, "scans"));
-      const scanList = querySnapshot.docs.map(doc => ({
+  const fetchScans = async () => {
+    const querySnapshot = await getDocs(collection(db, "scans"));
+    const scanList = querySnapshot.docs
+      .map(doc => ({
         id: doc.id,
         ...doc.data()
-      }));
-      setScans(scanList);
-    };
+      }))
+      .filter(scan => Array.isArray(scan.slices) && scan.slices.length > 0); // ✅ Only keep real scans
 
-    fetchScans();
-  }, []);
+    setScans(scanList);
+  };
+
+  fetchScans();
+}, []);
+
 
   // Helper to convert a Blob to base64
   const blobToBase64 = (blob) => {
