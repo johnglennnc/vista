@@ -6,7 +6,6 @@ import { getFirestore, collection, query, where, onSnapshot, addDoc, serverTimes
 import { getAuth } from "firebase/auth";
 import { storage } from "../firebase/config";
 import { app } from "../firebase/config";
-import { addDoc } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 
 const db = getFirestore(app);
@@ -27,47 +26,29 @@ function UploadScan() {
   const pollForResult = (uploadedFilename) => {
     setStatus("🕵️ Waiting for AI analysis result...");
     const q = query(collection(db, "scan-results"), where("filename", "==", uploadedFilename));
+
     if (unsubscribeRef.current) unsubscribeRef.current();
-    unsubscribeRef.current = onSnapshot(q, (snapshot) => {
+    unsubscribeRef.current = onSnapshot(q, async (snapshot) => {
       if (!snapshot.empty) {
         const doc = snapshot.docs[0];
         const resultData = doc.data();
-setAiResult(resultData.results || resultData.result);
-setStatus("✅ AI analysis result received.");
-const writeToScansCollection = async () => {
-  try {
-    await addDoc(collection(db, "scans"), {
-      scanId: resultData.filename || uploadedFilename,
-      slices: resultData.slices || [], // MUST be an array of Firebase Storage paths
-      aiAnalysis: resultData.results || resultData.result,
-      createdAt: new Date()
-    });
-    console.log("✅ Scan saved to 'scans' collection.");
-  } catch (err) {
-    console.error("❌ Error saving to 'scans' collection:", err);
-  }
-};
 
-writeToScansCollection(); // ✅ Fire off async write
+        setAiResult(resultData.results || resultData.result);
+        setStatus("✅ AI analysis result received.");
 
+        try {
+          await addDoc(collection(db, "scans"), {
+            scanId: resultData.filename || uploadedFilename,
+            slices: resultData.slices || [],
+            aiAnalysis: resultData.results || resultData.result,
+            createdAt: serverTimestamp(),
+          });
+          console.log("✅ Scan saved to 'scans' collection.");
+        } catch (err) {
+          console.error("❌ Error saving to 'scans' collection:", err);
+        }
 
-const addRealScan = async () => {
-  try {
-    await addDoc(collection(db, "scans"), {
-      scanId: resultData.filename || uploadedFilename,
-      slices: resultData.slices || [],
-      aiAnalysis: resultData.results || resultData.result,
-      createdAt: new Date()
-    });
-  } catch (err) {
-    console.error("Error writing to scans collection:", err);
-  }
-};
-
-addRealScan();  // ✅ Now it's properly async
-
-unsubscribeRef.current();
-
+        unsubscribeRef.current();
       }
     });
   };
@@ -109,20 +90,8 @@ unsubscribeRef.current();
             setStatus("📤 Upload complete. Waiting for AI analysis...");
             setProgress(100);
             resolve();
-            
           }
         );
-      });
-
-      // ✅ Add to Firestore 'scans' collection
-      const auth = getAuth();
-      const user = auth.currentUser;
-      await addDoc(collection(db, "scans"), {
-        scanId: generatedFilename,
-        userId: user?.uid || "unknown",
-        status: "uploaded",
-        createdAt: serverTimestamp(),
-        slices: [],
       });
 
       pollForResult(generatedFilename);
@@ -146,9 +115,7 @@ unsubscribeRef.current();
 
       <div
         {...getRootProps()}
-        className={`cursor-pointer p-6 border-2 border-dashed border-gray-500 rounded bg-gray-700 hover:bg-gray-600 transition ${
-          uploading ? "opacity-50 pointer-events-none" : ""
-        }`}
+        className={`cursor-pointer p-6 border-2 border-dashed border-gray-500 rounded bg-gray-700 hover:bg-gray-600 transition ${uploading ? "opacity-50 pointer-events-none" : ""}`}
       >
         <input {...getInputProps()} disabled={uploading} />
         <p className="text-lg">
@@ -160,10 +127,7 @@ unsubscribeRef.current();
         <div className="mt-4 text-sm text-blue-300">
           Progress: {progress}%<br />
           <div className="w-full h-2 bg-gray-700 rounded mt-2">
-            <div
-              className="h-2 bg-blue-500 rounded"
-              style={{ width: `${progress}%` }}
-            ></div>
+            <div className="h-2 bg-blue-500 rounded" style={{ width: `${progress}%` }}></div>
           </div>
         </div>
       )}

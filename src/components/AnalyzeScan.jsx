@@ -15,9 +15,10 @@ function AnalyzeScan() {
     const fetchScans = async () => {
       try {
         const querySnapshot = await getDocs(collection(db, "scans"));
-        const scanList = querySnapshot.docs
-          .map(doc => ({ id: doc.id, ...doc.data() }))
-          .filter(scan => Array.isArray(scan.slices) && scan.slices.length > 0);
+        const scanList = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
         setScans(scanList);
       } catch (err) {
         console.error("Error fetching scans:", err);
@@ -48,7 +49,7 @@ function AnalyzeScan() {
     const scan = scans.find(s => s.id === selectedScanId);
 
     if (!scan?.slices?.length) {
-      alert("No slices found for this scan.");
+      alert("No slices found for this scan yet.");
       return;
     }
 
@@ -129,7 +130,8 @@ function AnalyzeScan() {
         <option value="" disabled>Select a scan...</option>
         {scans.map(scan => (
           <option key={scan.id} value={scan.id}>
-            {scan.scanId || scan.id.slice(0, 12)}
+            {scan.scanId || scan.id.slice(0, 12)} 
+            {scan.slices?.length ? "" : " (Pending slices...)"}
           </option>
         ))}
       </select>
