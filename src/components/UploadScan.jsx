@@ -6,6 +6,7 @@ import { getFirestore, collection, query, where, onSnapshot, addDoc, serverTimes
 import { getAuth } from "firebase/auth";
 import { storage } from "../firebase/config";
 import { app } from "../firebase/config";
+import { addDoc } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 
 const db = getFirestore(app);
@@ -30,9 +31,27 @@ function UploadScan() {
     unsubscribeRef.current = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
         const doc = snapshot.docs[0];
-        setAiResult(doc.data().results || doc.data().result);
-        setStatus("✅ AI analysis result received.");
-        unsubscribeRef.current();
+        const resultData = doc.data();
+setAiResult(resultData.results || resultData.result);
+setStatus("✅ AI analysis result received.");
+
+const addRealScan = async () => {
+  try {
+    await addDoc(collection(db, "scans"), {
+      scanId: resultData.filename || uploadedFilename,
+      slices: resultData.slices || [],
+      aiAnalysis: resultData.results || resultData.result,
+      createdAt: new Date()
+    });
+  } catch (err) {
+    console.error("Error writing to scans collection:", err);
+  }
+};
+
+addRealScan();  // ✅ Now it's properly async
+
+unsubscribeRef.current();
+
       }
     });
   };
@@ -74,6 +93,7 @@ function UploadScan() {
             setStatus("📤 Upload complete. Waiting for AI analysis...");
             setProgress(100);
             resolve();
+            
           }
         );
       });
