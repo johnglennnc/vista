@@ -12,28 +12,25 @@ function AnalyzeScan() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-  const fetchScans = async () => {
-    const querySnapshot = await getDocs(collection(db, "scans"));
-    const scanList = querySnapshot.docs
-      .map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }))
-      .filter(scan => Array.isArray(scan.slices) && scan.slices.length > 0); // ✅ Only keep real scans
+    const fetchScans = async () => {
+      try {
+        const querySnapshot = await getDocs(collection(db, "scans"));
+        const scanList = querySnapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(scan => Array.isArray(scan.slices) && scan.slices.length > 0);
+        setScans(scanList);
+      } catch (err) {
+        console.error("Error fetching scans:", err);
+      }
+    };
 
-    setScans(scanList);
-  };
+    fetchScans();
+  }, []);
 
-  fetchScans();
-}, []);
-
-
-  // Helper to convert a Blob to base64
   const blobToBase64 = (blob) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => {
-        // Remove the "data:*/*;base64," prefix
         const result = reader.result.split(',')[1];
         resolve(result);
       };
@@ -59,7 +56,6 @@ function AnalyzeScan() {
     setLoading(true);
 
     try {
-      // 1. Download and encode all slices
       const sliceFiles = [];
       for (const storagePath of scan.slices) {
         const url = await getDownloadURL(storageRef(storage, storagePath));
@@ -71,13 +67,11 @@ function AnalyzeScan() {
 
       setAnalysisResult("🔄 Sending to AI for analysis...");
 
-      // 2. Get the user token
       const auth = getAuth();
       const user = auth.currentUser;
       if (!user) throw new Error("Not signed in");
       const idToken = await user.getIdToken();
 
-      // 3. POST to backend (secured)
       const res = await fetch(
         "https://us-central1-vista-lifeimaging.cloudfunctions.net/api/analyzeSlices",
         {
@@ -91,7 +85,6 @@ function AnalyzeScan() {
       );
       const data = await res.json();
 
-      // 4. Display result in UI
       setAnalysisResult(
         data.results
           ? JSON.stringify(data.results, null, 2)
@@ -100,22 +93,18 @@ function AnalyzeScan() {
             : "No result"
       );
 
-      // 5. Optionally update Firestore with result
       const scanDoc = doc(db, "scans", selectedScanId);
       await updateDoc(scanDoc, { aiAnalysis: data.results });
 
-      // 6. Optionally trigger deletion of images
       const functions = getFunctions(app);
       const deleteSliceImage = httpsCallable(functions, "deleteSliceImage");
 
-      if (scan.slices.length) {
-        for (const imagePath of scan.slices) {
-          try {
-            await deleteSliceImage({ imagePath });
-            console.log(`✅ Deleted ${imagePath}`);
-          } catch (err) {
-            console.error(`❌ Failed to delete ${imagePath}`, err);
-          }
+      for (const imagePath of scan.slices) {
+        try {
+          await deleteSliceImage({ imagePath });
+          console.log(`✅ Deleted ${imagePath}`);
+        } catch (err) {
+          console.error(`❌ Failed to delete ${imagePath}`, err);
         }
       }
 
@@ -140,7 +129,7 @@ function AnalyzeScan() {
         <option value="" disabled>Select a scan...</option>
         {scans.map(scan => (
           <option key={scan.id} value={scan.id}>
-            {scan.scanId || scan.id}
+            {scan.scanId || scan.id.slice(0, 12)}
           </option>
         ))}
       </select>
@@ -163,3 +152,4 @@ function AnalyzeScan() {
 }
 
 export default AnalyzeScan;
+

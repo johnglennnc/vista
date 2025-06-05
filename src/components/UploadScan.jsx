@@ -2,8 +2,9 @@ import React, { useState, useRef, useEffect } from "react";
 import JSZip from "jszip";
 import { useDropzone } from "react-dropzone";
 import { ref, uploadBytesResumable } from "firebase/storage";
+import { getFirestore, collection, query, where, onSnapshot, addDoc, serverTimestamp } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 import { storage } from "../firebase/config";
-import { getFirestore, collection, query, where, onSnapshot } from "firebase/firestore";
 import { app } from "../firebase/config";
 import { v4 as uuidv4 } from "uuid";
 
@@ -24,10 +25,7 @@ function UploadScan() {
 
   const pollForResult = (uploadedFilename) => {
     setStatus("🕵️ Waiting for AI analysis result...");
-    const q = query(
-      collection(db, "scan-results"),
-      where("filename", "==", uploadedFilename)
-    );
+    const q = query(collection(db, "scan-results"), where("filename", "==", uploadedFilename));
     if (unsubscribeRef.current) unsubscribeRef.current();
     unsubscribeRef.current = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
@@ -78,6 +76,17 @@ function UploadScan() {
             resolve();
           }
         );
+      });
+
+      // ✅ Add to Firestore 'scans' collection
+      const auth = getAuth();
+      const user = auth.currentUser;
+      await addDoc(collection(db, "scans"), {
+        scanId: generatedFilename,
+        userId: user?.uid || "unknown",
+        status: "uploaded",
+        createdAt: serverTimestamp(),
+        slices: [],
       });
 
       pollForResult(generatedFilename);
