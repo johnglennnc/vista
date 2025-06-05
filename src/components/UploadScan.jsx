@@ -34,6 +34,22 @@ function UploadScan() {
         const resultData = doc.data();
 setAiResult(resultData.results || resultData.result);
 setStatus("✅ AI analysis result received.");
+const writeToScansCollection = async () => {
+  try {
+    await addDoc(collection(db, "scans"), {
+      scanId: resultData.filename || uploadedFilename,
+      slices: resultData.slices || [], // MUST be an array of Firebase Storage paths
+      aiAnalysis: resultData.results || resultData.result,
+      createdAt: new Date()
+    });
+    console.log("✅ Scan saved to 'scans' collection.");
+  } catch (err) {
+    console.error("❌ Error saving to 'scans' collection:", err);
+  }
+};
+
+writeToScansCollection(); // ✅ Fire off async write
+
 
 const addRealScan = async () => {
   try {
