@@ -7,9 +7,8 @@ const cors = require("cors")({
   origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Authorization", "Content-Type", "x-goog-meta-foo"],
-  credentials: true
+  credentials: true,
 });
-
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -20,7 +19,6 @@ const sharp = require("sharp");
 admin.initializeApp();
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 
-// ==== Auth helper ====
 async function authenticateFirebaseToken(req, res) {
   try {
     const authHeader = req.headers.authorization || "";
@@ -39,7 +37,6 @@ async function authenticateFirebaseToken(req, res) {
   }
 }
 
-// ==== Analyze (manual trigger) ====
 exports.analyzeSlices = onRequest({ secrets: [OPENAI_API_KEY] }, async (req, res) => {
   if (req.method === "OPTIONS") {
     cors(req, res, () => {
@@ -105,7 +102,6 @@ exports.analyzeSlices = onRequest({ secrets: [OPENAI_API_KEY] }, async (req, res
   });
 });
 
-// ==== CORS Test ====
 exports.corsTest = onRequest((req, res) => {
   if (req.method === "OPTIONS") {
     cors(req, res, () => {
@@ -120,7 +116,6 @@ exports.corsTest = onRequest((req, res) => {
   });
 });
 
-// ==== Delete Firestore Entry on File Delete ====
 exports.deleteSliceImage = onObjectDeleted(
   { bucket: "vista-lifeimaging-ct-data" },
   async (event) => {
@@ -143,7 +138,6 @@ exports.deleteSliceImage = onObjectDeleted(
   }
 );
 
-// ==== Main DICOM Upload Auto-Analyzer ====
 exports.analyzeAndAutoDelete = onObjectFinalized(
   { bucket: "vista-lifeimaging-ct-data", region: "us-central1" },
   async (event) => {
@@ -157,7 +151,6 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
 
     const bucket = admin.storage().bucket(file.bucket);
     const tempZipPath = path.join(os.tmpdir(), path.basename(filePath));
-
     await bucket.file(filePath).download({ destination: tempZipPath });
     console.log(`✅ Downloaded ZIP: ${tempZipPath}`);
 
@@ -165,13 +158,16 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
     const zip = await JSZip.loadAsync(zipBuffer);
     const files = Object.keys(zip.files);
     const results = [];
+    const slicePaths = [];
 
     const apiKey = OPENAI_API_KEY.value();
     if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
     const openai = new OpenAI({ apiKey });
 
-    for (let i = 0; i < files.length; i++) {
-      const filename = files[i];
+    const scanId = path.basename(filePath, ".zip");
+    const userId = "unknown"; // Optional: populate later
+
+    for (const filename of files) {
       const fileRef = zip.files[filename];
       if (fileRef.dir || !filename.endsWith(".dcm")) continue;
 
@@ -187,8 +183,8 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
           pixelElement.length
         );
 
-        const width = dataSet.uint16("x00280011"); // Columns
-        const height = dataSet.uint16("x00280010"); // Rows
+        const width = dataSet.uint16("x00280011");
+        const height = dataSet.uint16("x00280010");
 
         const pngBuffer = await sharp(Buffer.from(pixelData), {
           raw: { width, height, channels: 1 },
@@ -197,8 +193,13 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
           .png()
           .toBuffer();
 
-        const base64Image = pngBuffer.toString("base64");
+        const sliceFilePath = `users/${userId}/scans/${scanId}/${filename.replace(".dcm", ".png")}`;
+        await bucket.file(sliceFilePath).save(pngBuffer, {
+          metadata: { contentType: "image/png" },
+        });
+        slicePaths.push(sliceFilePath);
 
+        const base64Image = pngBuffer.toString("base64");
         const gptRes = await openai.chat.completions.create({
           model: "gpt-4o",
           messages: [
@@ -228,17 +229,24 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
         });
       } catch (err) {
         console.error(`❌ Error on ${filename}:`, err.message);
-        results.push({
-          filename,
-          result: `Error: ${err.message}`,
-        });
+        results.push({ filename, result: `Error: ${err.message}` });
       }
     }
 
-    await admin.firestore().collection("scan-results").add({
+    const db = admin.firestore();
+    await db.collection("scan-results").add({
       filename: path.basename(filePath),
       results,
+      slices: slicePaths,
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await db.collection("scans").add({
+      scanId,
+      userId,
+      slices: slicePaths,
+      aiAnalysis: results,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
     await bucket.file(filePath).delete();
@@ -248,5 +256,6 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
     return null;
   }
 );
+
 
 

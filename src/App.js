@@ -165,7 +165,9 @@ function AnalyzeScan() {
           id: doc.id,
           ...doc.data()
         }))
-        .filter(scan => Array.isArray(scan.slices) && scan.slices.length > 0);
+       // Show all scans, even if slices are still being processed
+// (you can later add status labels to indicate readiness)
+
 
       setScans(scanList);
     };
