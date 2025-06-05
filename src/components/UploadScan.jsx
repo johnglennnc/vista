@@ -1,46 +1,13 @@
 import React, { useState, useRef, useEffect } from "react";
-import dicomParser from "dicom-parser";
 import JSZip from "jszip";
 import { useDropzone } from "react-dropzone";
 import { ref, uploadBytesResumable } from "firebase/storage";
 import { storage } from "../firebase/config";
 import { getFirestore, collection, query, where, onSnapshot } from "firebase/firestore";
 import { app } from "../firebase/config";
+import { v4 as uuidv4 } from "uuid";
 
 const db = getFirestore(app);
-
-// Helper: Convert DICOM file to base64 PNG (grayscale only, basic)
-async function dicomFileToPng(file) {
-  const buffer = await file.arrayBuffer();
-  const dataSet = dicomParser.parseDicom(new Uint8Array(buffer));
-  const pixelDataElement = dataSet.elements.x7fe00010;
-  if (!pixelDataElement) throw new Error("No pixel data found in DICOM.");
-  const pixelData = new Uint8Array(
-    dataSet.byteArray.buffer,
-    pixelDataElement.dataOffset,
-    pixelDataElement.length
-  );
-  const rows = dataSet.uint16("x00280010");
-  const cols = dataSet.uint16("x00280011");
-
-  const canvas = document.createElement("canvas");
-  canvas.width = cols;
-  canvas.height = rows;
-  const ctx = canvas.getContext("2d");
-  const imgData = ctx.createImageData(cols, rows);
-
-  for (let i = 0; i < pixelData.length; i++) {
-    const val = pixelData[i];
-    imgData.data[i * 4 + 0] = val;
-    imgData.data[i * 4 + 1] = val;
-    imgData.data[i * 4 + 2] = val;
-    imgData.data[i * 4 + 3] = 255;
-  }
-  ctx.putImageData(imgData, 0, 0);
-
-  // Return base64 PNG (no data:image/png;base64, prefix)
-  return canvas.toDataURL("image/png").split(",")[1];
-}
 
 function UploadScan() {
   const [status, setStatus] = useState("Idle");
@@ -49,14 +16,12 @@ function UploadScan() {
   const [progress, setProgress] = useState(0);
   const unsubscribeRef = useRef(null);
 
-  // Clean up Firestore listener on unmount
   useEffect(() => {
     return () => {
       if (unsubscribeRef.current) unsubscribeRef.current();
     };
   }, []);
 
-  // Start polling for result in Firestore after upload
   const pollForResult = (uploadedFilename) => {
     setStatus("🕵️ Waiting for AI analysis result...");
     const q = query(
@@ -76,38 +41,29 @@ function UploadScan() {
 
   const onDrop = async (acceptedFiles) => {
     setUploading(true);
-    setStatus("🖼️ Converting DICOM slices to PNG...");
+    setStatus("📦 Zipping DICOM files...");
     setProgress(0);
     setAiResult(null);
 
     try {
-      // Convert DICOMs to PNGs
       const zip = new JSZip();
       for (let i = 0; i < acceptedFiles.length; i++) {
         const file = acceptedFiles[i];
-        const pngBase64 = await dicomFileToPng(file);
-        // Store as .png in zip (convert base64 to Uint8Array)
-        zip.file(
-          file.name.replace(/\.dcm$/, ".png"),
-          Uint8Array.from(atob(pngBase64), (c) => c.charCodeAt(0))
-        );
-        setProgress(Math.round(((i + 1) / acceptedFiles.length) * 50)); // 50% for conversion
+        zip.file(file.name, file);
+        setProgress(Math.round(((i + 1) / acceptedFiles.length) * 25)); // 25% for zipping
       }
 
-      setStatus("☁️ Zipping and uploading PNGs to Firebase Storage...");
       const zipBlob = await zip.generateAsync({ type: "blob" });
-      const generatedFilename = `scan_${Date.now()}.zip`;
-
-      // Upload ZIP to Firebase Storage (temp-uploads)
+      const generatedFilename = `scan_${uuidv4()}.zip`;
       const zipRef = ref(storage, `temp-uploads/${generatedFilename}`);
+
       const uploadTask = uploadBytesResumable(zipRef, zipBlob);
 
       await new Promise((resolve, reject) => {
         uploadTask.on(
           "state_changed",
           (snapshot) => {
-            const percent =
-              50 + Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 50);
+            const percent = 25 + Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 75);
             setProgress(percent);
             setStatus(`☁️ Uploading ZIP to Firebase Storage... ${percent}%`);
           },
@@ -117,19 +73,19 @@ function UploadScan() {
             reject(error);
           },
           () => {
-            setStatus("📦 File uploaded. Waiting for AI analysis...");
+            setStatus("📤 Upload complete. Waiting for AI analysis...");
             setProgress(100);
             resolve();
           }
         );
       });
 
-      // Start polling Firestore for analysis result by filename
       pollForResult(generatedFilename);
     } catch (err) {
-      setStatus(`❌ Upload or conversion failed: ${err.message}`);
+      setStatus(`❌ Upload or zipping failed: ${err.message}`);
       setUploading(false);
     }
+
     setUploading(false);
   };
 
@@ -182,4 +138,3 @@ function UploadScan() {
 }
 
 export default UploadScan;
-
