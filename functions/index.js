@@ -4,23 +4,20 @@ const { defineSecret } = require("firebase-functions/params");
 const OpenAI = require("openai");
 const admin = require("firebase-admin");
 const cors = require("cors")({
-  origin: [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    // "https://your-production-url.com"
-  ],
+  origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Authorization", "Content-Type", "x-goog-meta-foo"],
   credentials: true
 });
+
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
 const JSZip = require("jszip");
+const dicomParser = require("dicom-parser");
+const sharp = require("sharp");
 
 admin.initializeApp();
-
-// ==== OpenAI API Key Secret ====
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 
 // ==== Auth helper ====
@@ -42,85 +39,73 @@ async function authenticateFirebaseToken(req, res) {
   }
 }
 
-// ==== Main AI endpoint ====
-exports.analyzeSlices = onRequest(
-  { secrets: [OPENAI_API_KEY] },
-  async (req, res) => {
-    // ---- Handle CORS preflight ----
-    if (req.method === "OPTIONS") {
-      cors(req, res, () => {
-        res.set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-goog-meta-foo");
-        res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        res.status(204).send("");
-      });
-      return;
-    }
+// ==== Analyze (manual trigger) ====
+exports.analyzeSlices = onRequest({ secrets: [OPENAI_API_KEY] }, async (req, res) => {
+  if (req.method === "OPTIONS") {
+    cors(req, res, () => {
+      res.set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-goog-meta-foo");
+      res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.status(204).send("");
+    });
+    return;
+  }
 
-    cors(req, res, async () => {
-      // ---- Auth check ----
-      const user = await authenticateFirebaseToken(req, res);
-      if (!user) return; // Auth failed
+  cors(req, res, async () => {
+    const user = await authenticateFirebaseToken(req, res);
+    if (!user) return;
 
-      try {
-        const { slices } = req.body;
-        if (!slices || slices.length === 0) {
-          return res.status(400).json({ error: "No slices provided" });
-        }
+    try {
+      const { slices } = req.body;
+      if (!slices || slices.length === 0) {
+        return res.status(400).json({ error: "No slices provided" });
+      }
 
-        // -- Only instantiate OpenAI after checking the secret
-        const apiKey = OPENAI_API_KEY.value();
-        if (!apiKey) {
-          console.error("OPENAI_API_KEY.value() is falsy! (not set, empty, or not injected)");
-          return res.status(500).json({ error: "Server misconfiguration: OPENAI_API_KEY is missing" });
-        }
+      const apiKey = OPENAI_API_KEY.value();
+      if (!apiKey) return res.status(500).json({ error: "OPENAI_API_KEY not available" });
 
-        const openai = new OpenAI({
-          apiKey,
+      const openai = new OpenAI({ apiKey });
+      const responses = [];
+
+      for (const slice of slices) {
+        const imageBase64 = slice.base64;
+        const gptRes = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a radiologist AI. Analyze this CT slice and identify any tumors, lesions, or anomalies. Be concise and clinical.",
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:image/png;base64,${imageBase64}`,
+                  },
+                },
+              ],
+            },
+          ],
+          temperature: 0.3,
         });
 
-        const responses = [];
-        for (const slice of slices) {
-          const imageBase64 = slice.base64;
-
-          const gptRes = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are a radiologist AI. Analyze this CT slice and identify any tumors, lesions, or anomalies. Be concise and clinical.",
-              },
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "image_url",
-                    image_url: {
-                      url: `data:image/png;base64,${imageBase64}`,
-                    },
-                  },
-                ],
-              },
-            ],
-            temperature: 0.3,
-          });
-
-          const result = gptRes.choices[0].message.content;
-          responses.push({
-            filename: slice.name,
-            result,
-          });
-        }
-        return res.status(200).json({ results: responses });
-      } catch (err) {
-        console.error("GPT Vision Error:", err);
-        return res.status(500).json({ error: err.message || "AI processing error" });
+        responses.push({
+          filename: slice.name,
+          result: gptRes.choices[0].message.content,
+        });
       }
-    });
-  }
-);
 
-// ==== Test endpoint for CORS ====
+      return res.status(200).json({ results: responses });
+    } catch (err) {
+      console.error("GPT Vision Error:", err);
+      return res.status(500).json({ error: err.message || "AI processing error" });
+    }
+  });
+});
+
+// ==== CORS Test ====
 exports.corsTest = onRequest((req, res) => {
   if (req.method === "OPTIONS") {
     cors(req, res, () => {
@@ -135,7 +120,7 @@ exports.corsTest = onRequest((req, res) => {
   });
 });
 
-// ==== deleteSliceImage (unchanged) ====
+// ==== Delete Firestore Entry on File Delete ====
 exports.deleteSliceImage = onObjectDeleted(
   { bucket: "vista-lifeimaging-ct-data" },
   async (event) => {
@@ -158,55 +143,69 @@ exports.deleteSliceImage = onObjectDeleted(
   }
 );
 
-// ==== analyzeAndAutoDelete: Analyze uploaded ZIP in temp-uploads, then delete ====
+// ==== Main DICOM Upload Auto-Analyzer ====
 exports.analyzeAndAutoDelete = onObjectFinalized(
   { bucket: "vista-lifeimaging-ct-data", region: "us-central1" },
   async (event) => {
     const file = event.data;
     const filePath = file.name;
 
-    // Only process ZIPs in "temp-uploads/"
     if (!filePath.startsWith("temp-uploads/") || !filePath.endsWith(".zip")) {
       console.log("Ignoring file:", filePath);
       return;
     }
 
     const bucket = admin.storage().bucket(file.bucket);
-    const tempFilePath = path.join(os.tmpdir(), path.basename(filePath));
+    const tempZipPath = path.join(os.tmpdir(), path.basename(filePath));
 
-    // 1. Download file
-    await bucket.file(filePath).download({ destination: tempFilePath });
-    console.log(`Downloaded file to ${tempFilePath}`);
+    await bucket.file(filePath).download({ destination: tempZipPath });
+    console.log(`✅ Downloaded ZIP: ${tempZipPath}`);
 
-    // 2. Unzip and call OpenAI Vision for each PNG slice
-    const zipBuffer = fs.readFileSync(tempFilePath);
+    const zipBuffer = fs.readFileSync(tempZipPath);
     const zip = await JSZip.loadAsync(zipBuffer);
-
-    // -- Only instantiate OpenAI after checking the secret
-    const apiKey = OPENAI_API_KEY.value();
-    if (!apiKey) {
-      console.error("OPENAI_API_KEY.value() is falsy! (not set, empty, or not injected)");
-      throw new Error("Server misconfiguration: OPENAI_API_KEY is missing");
-    }
-
-    const openai = new OpenAI({ apiKey });
-
-    const results = [];
     const files = Object.keys(zip.files);
+    const results = [];
+
+    const apiKey = OPENAI_API_KEY.value();
+    if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
+    const openai = new OpenAI({ apiKey });
 
     for (let i = 0; i < files.length; i++) {
       const filename = files[i];
-      if (zip.files[filename].dir) continue;
-      // This assumes slices are PNGs. If DICOM, you need to convert.
-      const fileData = await zip.files[filename].async("base64");
+      const fileRef = zip.files[filename];
+      if (fileRef.dir || !filename.endsWith(".dcm")) continue;
+
       try {
+        const dicomBuffer = Buffer.from(await fileRef.async("uint8array"));
+        const dataSet = dicomParser.parseDicom(dicomBuffer);
+        const pixelElement = dataSet.elements.x7fe00010;
+        if (!pixelElement) throw new Error("No pixel data");
+
+        const pixelData = new Uint8Array(
+          dicomBuffer.buffer,
+          pixelElement.dataOffset,
+          pixelElement.length
+        );
+
+        const width = dataSet.uint16("x00280011"); // Columns
+        const height = dataSet.uint16("x00280010"); // Rows
+
+        const pngBuffer = await sharp(Buffer.from(pixelData), {
+          raw: { width, height, channels: 1 },
+        })
+          .resize(512, 512)
+          .png()
+          .toBuffer();
+
+        const base64Image = pngBuffer.toString("base64");
+
         const gptRes = await openai.chat.completions.create({
           model: "gpt-4o",
           messages: [
             {
               role: "system",
               content:
-                "You are a radiologist AI. Analyze this CT slice and identify any tumors, lesions, or anomalies. Be concise and clinical."
+                "You are a radiologist AI. Analyze this CT slice and identify any tumors, lesions, or anomalies. Be concise and clinical.",
             },
             {
               role: "user",
@@ -214,42 +213,40 @@ exports.analyzeAndAutoDelete = onObjectFinalized(
                 {
                   type: "image_url",
                   image_url: {
-                    url: `data:image/png;base64,${fileData}`
-                  }
-                }
-              ]
-            }
+                    url: `data:image/png;base64,${base64Image}`,
+                  },
+                },
+              ],
+            },
           ],
           temperature: 0.3,
         });
-        const result = gptRes.choices[0].message.content;
+
         results.push({
           filename,
-          result,
+          result: gptRes.choices[0].message.content,
         });
       } catch (err) {
+        console.error(`❌ Error on ${filename}:`, err.message);
         results.push({
           filename,
-          result: "OpenAI Vision Error: " + err.message,
+          result: `Error: ${err.message}`,
         });
       }
     }
 
-    // 3. Save analysis result to Firestore (or wherever you want)
     await admin.firestore().collection("scan-results").add({
       filename: path.basename(filePath),
       results,
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // 4. Delete file from Storage
     await bucket.file(filePath).delete();
-    console.log("Deleted file:", filePath);
-
-    // 5. Clean up temp file
-    fs.unlinkSync(tempFilePath);
+    fs.unlinkSync(tempZipPath);
+    console.log("🧹 Cleanup complete");
 
     return null;
   }
 );
+
 

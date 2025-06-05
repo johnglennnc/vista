@@ -2,6 +2,8 @@
   "functions": {
     "source": "functions",
     "runtime": "nodejs22",
+    "timeoutSeconds": 300,
+    "memory": "1GiB",
     "ignore": [
       "node_modules",
       ".git",
