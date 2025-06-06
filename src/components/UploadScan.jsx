@@ -12,11 +12,18 @@ function UploadScan() {
   const [progress, setProgress] = useState(0);
 
   const { getRootProps, getInputProps } = useDropzone({
-    onDrop: async (acceptedFiles) => {
-      console.log("onDrop fired!", acceptedFiles);
-      setUploading(true);
-      setStatus("📦 Zipping files...");
-      setProgress(0);
+  onDrop: async (acceptedFiles) => {
+    // >>>>> ADD THIS BLOCK <<<<<
+    const auth = getAuth();
+    const user = auth.currentUser;
+    console.log("Uploading as user:", user);
+    // >>>>> END BLOCK <<<<<
+
+    console.log("onDrop fired!", acceptedFiles);
+    setUploading(true);
+    setStatus("📦 Zipping files...");
+    setProgress(0);
+
 
       try {
         // Bundle as zip if not already a zip
