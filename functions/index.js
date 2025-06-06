@@ -1,8 +1,9 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { onObjectDeleted, onObjectFinalized } = require("firebase-functions/v2/storage");
 const { defineSecret } = require("firebase-functions/params");
-const OpenAI = require("openai");
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");  // <--- ADD THIS LINE
 const admin = require("firebase-admin");
+admin.initializeApp();
 const cors = require("cors")({
   origin: ["http://localhost:3000", "http://127.0.0.1:3000"],
   methods: ["GET", "POST", "OPTIONS"],
@@ -13,12 +14,16 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 const JSZip = require("jszip");
+const { Storage } = require("@google-cloud/storage");
+const OpenAI = require("openai");
 const dicomParser = require("dicom-parser");
 const sharp = require("sharp");
-
-admin.initializeApp();
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 
+// Your helpers and function exports go below here
+exports.hello = onRequest(async (req, res) => {
+  res.json({ ok: true });
+});
 async function authenticateFirebaseToken(req, res) {
   try {
     const authHeader = req.headers.authorization || "";
@@ -36,7 +41,6 @@ async function authenticateFirebaseToken(req, res) {
     return null;
   }
 }
-
 exports.analyzeSlices = onRequest({ secrets: [OPENAI_API_KEY] }, async (req, res) => {
   if (req.method === "OPTIONS") {
     cors(req, res, () => {
@@ -101,7 +105,6 @@ exports.analyzeSlices = onRequest({ secrets: [OPENAI_API_KEY] }, async (req, res
     }
   });
 });
-
 exports.corsTest = onRequest((req, res) => {
   if (req.method === "OPTIONS") {
     cors(req, res, () => {
@@ -115,7 +118,6 @@ exports.corsTest = onRequest((req, res) => {
     res.json({ ok: true, origin: req.headers.origin || null });
   });
 });
-
 exports.deleteSliceImage = onObjectDeleted(
   { bucket: "vista-lifeimaging-ct-data" },
   async (event) => {
@@ -137,130 +139,142 @@ exports.deleteSliceImage = onObjectDeleted(
     return null;
   }
 );
-
-exports.analyzeAndAutoDelete = onObjectFinalized(
-  { bucket: "vista-lifeimaging-ct-data", region: "us-central1" },
-  async (event) => {
-    const file = event.data;
-    const filePath = file.name;
-
-    if (!filePath.startsWith("temp-uploads/") || !filePath.endsWith(".zip")) {
-      console.log("Ignoring file:", filePath);
+exports.processUploadedScan = onObjectFinalized(
+  { bucket: "vista-lifeimaging-ct-data" },
+  async (object) => {
+    if (!object.name.startsWith("temp-uploads/") || !object.name.endsWith(".zip")) {
+      console.log("Ignoring file:", object.name);
       return;
     }
 
-    const bucket = admin.storage().bucket(file.bucket);
-    const tempZipPath = path.join(os.tmpdir(), path.basename(filePath));
-    await bucket.file(filePath).download({ destination: tempZipPath });
+    const bucket = admin.storage().bucket(object.bucket);
+    const tempZipPath = path.join(os.tmpdir(), path.basename(object.name));
+    await bucket.file(object.name).download({ destination: tempZipPath });
     console.log(`✅ Downloaded ZIP: ${tempZipPath}`);
-    const [fileMetadata] = await bucket.file(filePath).getMetadata();
 
-    const userId = fileMetadata.metadata && fileMetadata.metadata.userId ? fileMetadata.metadata.userId : "unknown";
-
+    // Get userId from metadata if present
+    let userId = "unknown";
+    try {
+      const [fileMetadata] = await bucket.file(object.name).getMetadata();
+      userId = fileMetadata.metadata && fileMetadata.metadata.userId ? fileMetadata.metadata.userId : "unknown";
+    } catch (err) {
+      console.warn("No userId metadata found, defaulting to 'unknown'");
+    }
 
     const zipBuffer = fs.readFileSync(tempZipPath);
     const zip = await JSZip.loadAsync(zipBuffer);
-    const files = Object.keys(zip.files);
-    const results = [];
     const slicePaths = [];
 
-    const apiKey = OPENAI_API_KEY.value();
-    if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
-    const openai = new OpenAI({ apiKey });
+    const scanId = path.basename(object.name, ".zip");
 
-    const scanId = path.basename(filePath, ".zip");
+    // Unzip DICOMs and upload to /slices/{scanId}/
+    await Promise.all(
+      Object.keys(zip.files).map(async (filename) => {
+        const fileRef = zip.files[filename];
+        if (fileRef.dir) return; // Skip directories
+        // You can optionally validate file type here (.dcm)
+        const content = await fileRef.async("nodebuffer");
+        const uploadPath = `slices/${scanId}/${filename}`;
+        await bucket.file(uploadPath).save(content);
+        slicePaths.push(uploadPath);
+      })
+    );
 
-    for (const filename of files) {
-      const fileRef = zip.files[filename];
-      if (fileRef.dir || !filename.endsWith(".dcm")) continue;
-
-      try {
-        const dicomBuffer = Buffer.from(await fileRef.async("uint8array"));
-        const dataSet = dicomParser.parseDicom(dicomBuffer);
-        const pixelElement = dataSet.elements.x7fe00010;
-        if (!pixelElement) throw new Error("No pixel data");
-
-        const pixelData = new Uint8Array(
-          dicomBuffer.buffer,
-          pixelElement.dataOffset,
-          pixelElement.length
-        );
-
-        const width = dataSet.uint16("x00280011");
-        const height = dataSet.uint16("x00280010");
-
-        const pngBuffer = await sharp(Buffer.from(pixelData), {
-          raw: { width, height, channels: 1 },
-        })
-          .resize(512, 512)
-          .png()
-          .toBuffer();
-
-        const sliceFilePath = `users/${userId}/scans/${scanId}/${filename.replace(".dcm", ".png")}`;
-        await bucket.file(sliceFilePath).save(pngBuffer, {
-          metadata: { contentType: "image/png" },
-        });
-        slicePaths.push(sliceFilePath);
-
-        const base64Image = pngBuffer.toString("base64");
-        const gptRes = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are a radiologist AI. Analyze this CT slice and identify any tumors, lesions, or anomalies. Be concise and clinical.",
-            },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:image/png;base64,${base64Image}`,
-                  },
-                },
-              ],
-            },
-          ],
-          temperature: 0.3,
-        });
-
-        results.push({
-          filename,
-          result: gptRes.choices[0].message.content,
-        });
-      } catch (err) {
-        console.error(`❌ Error on ${filename}:`, err.message);
-        results.push({ filename, result: `Error: ${err.message}` });
-      }
-    }
-
+    // Create a Firestore scan record so it shows up in your frontend!
     const db = admin.firestore();
-    await db.collection("scan-results").add({
-      filename: path.basename(filePath),
-      results,
+    await db.collection("scans").add({
+      scanId,
+      userId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      status: "pending",
       slices: slicePaths,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-   await db.collection("scans").add({
-  scanId,
-  userId,
-  status: "processed",
-  slices: slicePaths,
-  aiAnalysis: results,
-  createdAt: admin.firestore.FieldValue.serverTimestamp(),
-});
-
-
-    await bucket.file(filePath).delete();
+    // Delete the uploaded ZIP (cleanup)
+    await bucket.file(object.name).delete();
     fs.unlinkSync(tempZipPath);
-    console.log("🧹 Cleanup complete");
+    console.log("🧹 Cleanup complete for ZIP and temp file");
 
     return null;
   }
 );
 
+// --------- ADD THIS SECTION TO THE BOTTOM ---------
+// Auto-analyze every new scan
+exports.autoAnalyzeScan = onDocumentCreated("scans/{scanId}", async (event) => {
+  const snap = event.data;
+  if (!snap) return;
+  const data = snap.data();
+  const { slices = [], scanId } = data;
 
+  if (!slices.length) {
+    console.log("No slices to analyze");
+    return;
+  }
+
+  // Download all slices from storage and convert to base64
+  const bucket = admin.storage().bucket();
+  const sliceFiles = [];
+
+  for (const storagePath of slices) {
+    const file = bucket.file(storagePath);
+    const [contents] = await file.download();
+    const base64 = contents.toString('base64');
+    sliceFiles.push({ name: storagePath.split('/').pop(), base64 });
+  }
+
+  // Call OpenAI Vision API for each slice
+  const apiKey = process.env.OPENAI_API_KEY || (OPENAI_API_KEY ? OPENAI_API_KEY.value() : null);
+  if (!apiKey) {
+    console.error("No OpenAI API Key available.");
+    return;
+  }
+  const openai = new OpenAI({ apiKey });
+
+  const responses = [];
+  for (const slice of sliceFiles) {
+    try {
+      const gptRes = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "You are a radiologist AI. Analyze this CT slice and identify any tumors, lesions, or anomalies. Be concise and clinical.",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${slice.base64}`,
+                },
+              },
+            ],
+          },
+        ],
+        temperature: 0.3,
+      });
+      responses.push({
+        filename: slice.name,
+        result: gptRes.choices[0].message.content,
+      });
+    } catch (err) {
+      responses.push({
+        filename: slice.name,
+        result: "Error: " + (err.message || "AI processing error"),
+      });
+    }
+  }
+
+  // Write results to scan-results
+  await admin.firestore().collection("scan-results").add({
+    scanId,
+    filename: scanId,
+    results: responses,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  console.log("✅ Analysis complete and results saved for scanId:", scanId);
+});
 
