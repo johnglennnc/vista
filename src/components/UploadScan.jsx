@@ -12,31 +12,27 @@ function UploadScan() {
   const [progress, setProgress] = useState(0);
 
   const { getRootProps, getInputProps } = useDropzone({
-  onDrop: async (acceptedFiles) => {
-    // >>>>> ADD THIS BLOCK <<<<<
-    const auth = getAuth();
-    const user = auth.currentUser;
-    console.log("Uploading as user:", user);
-    // >>>>> END BLOCK <<<<<
+    onDrop: async (acceptedFiles) => {
+      // ==== Auth & User Debug Block ====
+      const auth = getAuth();
+      const user = auth.currentUser;
+      alert("Uploading as user: " + JSON.stringify(user)); // <--- force visible popup!
+      setStatus("DEBUG: User = " + JSON.stringify(user));
+      // ==== End Debug Block ====
 
-    console.log("onDrop fired!", acceptedFiles);
-    setUploading(true);
-    setStatus("📦 Zipping files...");
-    setProgress(0);
-
+      console.log("onDrop fired!", acceptedFiles);
+      setUploading(true);
+      setStatus("📦 Preparing upload...");
+      setProgress(0);
 
       try {
-        // Bundle as zip if not already a zip
         let zipBlob, generatedFilename;
-        if (
-          acceptedFiles.length === 1 &&
-          acceptedFiles[0].name.endsWith(".zip")
-        ) {
-          // If it's a single .zip, upload as-is
+
+        // --- Upload as-is if only a single .zip, else zip everything ---
+        if (acceptedFiles.length === 1 && acceptedFiles[0].name.endsWith(".zip")) {
           zipBlob = acceptedFiles[0];
           generatedFilename = acceptedFiles[0].name;
         } else {
-          // Otherwise, zip all files together
           const zip = new JSZip();
           for (let i = 0; i < acceptedFiles.length; i++) {
             zip.file(acceptedFiles[i].name, acceptedFiles[i]);
@@ -46,11 +42,9 @@ function UploadScan() {
           generatedFilename = `scan_${uuidv4()}.zip`;
         }
 
-        const auth = getAuth();
-        const user = auth.currentUser;
         const zipRef = ref(storage, `temp-uploads/${generatedFilename}`);
 
-        // Upload with metadata
+        // --- Upload to Firebase Storage ---
         const uploadTask = uploadBytesResumable(zipRef, zipBlob, {
           customMetadata: {
             userId: user ? user.uid : "unknown",
@@ -63,9 +57,7 @@ function UploadScan() {
             (snapshot) => {
               const percent =
                 10 +
-                Math.round(
-                  (snapshot.bytesTransferred / snapshot.totalBytes) * 80
-                );
+                Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 80);
               setProgress(percent);
               setStatus(`☁️ Uploading ZIP... ${percent}%`);
             },
