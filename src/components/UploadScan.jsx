@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import JSZip from "jszip";
 import { useDropzone } from "react-dropzone";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
@@ -11,22 +11,33 @@ function UploadScan() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
 
-  // Always .zip for now
   const { getRootProps, getInputProps } = useDropzone({
     onDrop: async (acceptedFiles) => {
+      console.log("onDrop fired!", acceptedFiles);
       setUploading(true);
       setStatus("📦 Zipping files...");
       setProgress(0);
 
       try {
-        // Bundle as zip
-        const zip = new JSZip();
-        for (let i = 0; i < acceptedFiles.length; i++) {
-          zip.file(acceptedFiles[i].name, acceptedFiles[i]);
-          setProgress(Math.round(((i + 1) / acceptedFiles.length) * 10));
+        // Bundle as zip if not already a zip
+        let zipBlob, generatedFilename;
+        if (
+          acceptedFiles.length === 1 &&
+          acceptedFiles[0].name.endsWith(".zip")
+        ) {
+          // If it's a single .zip, upload as-is
+          zipBlob = acceptedFiles[0];
+          generatedFilename = acceptedFiles[0].name;
+        } else {
+          // Otherwise, zip all files together
+          const zip = new JSZip();
+          for (let i = 0; i < acceptedFiles.length; i++) {
+            zip.file(acceptedFiles[i].name, acceptedFiles[i]);
+            setProgress(Math.round(((i + 1) / acceptedFiles.length) * 10));
+          }
+          zipBlob = await zip.generateAsync({ type: "blob" });
+          generatedFilename = `scan_${uuidv4()}.zip`;
         }
-        const zipBlob = await zip.generateAsync({ type: "blob" });
-        const generatedFilename = `scan_${uuidv4()}.zip`;
 
         const auth = getAuth();
         const user = auth.currentUser;
@@ -36,15 +47,18 @@ function UploadScan() {
         const uploadTask = uploadBytesResumable(zipRef, zipBlob, {
           customMetadata: {
             userId: user ? user.uid : "unknown",
-          }
+          },
         });
 
         await new Promise((resolve, reject) => {
           uploadTask.on(
             "state_changed",
             (snapshot) => {
-              // Progress bar up to 90% during upload
-              const percent = 10 + Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 80);
+              const percent =
+                10 +
+                Math.round(
+                  (snapshot.bytesTransferred / snapshot.totalBytes) * 80
+                );
               setProgress(percent);
               setStatus(`☁️ Uploading ZIP... ${percent}%`);
             },
@@ -54,17 +68,18 @@ function UploadScan() {
               reject(error);
             },
             async () => {
-              // Upload is "complete"—now confirm existence in bucket!
               setProgress(90);
               setStatus("⏳ Verifying upload in storage...");
               try {
-                // This checks if file is actually present and downloadable
                 await getDownloadURL(zipRef);
                 setStatus("✅ Upload complete! File is now in Storage.");
                 setProgress(100);
                 resolve();
               } catch (err) {
-                setStatus("❌ Upload claimed complete, but not found in bucket: " + err.message);
+                setStatus(
+                  "❌ Upload claimed complete, but not found in bucket: " +
+                    err.message
+                );
                 setProgress(0);
                 setUploading(false);
                 reject(err);
@@ -80,20 +95,25 @@ function UploadScan() {
       setUploading(false);
     },
     multiple: true,
-    // Accept only .zip for this phase
-    accept: { "application/zip": [".zip"] },
+    accept: {
+      "application/zip": [".zip"],
+      "application/dicom": [".dcm"],
+      "application/octet-stream": [".dcm"],
+    },
   });
 
   return (
     <div className="border border-gray-700 rounded p-6 bg-gray-800 text-center">
-      <h2 className="text-xl font-semibold mb-4">📁 Upload CT ZIP File</h2>
+      <h2 className="text-xl font-semibold mb-4">📁 Upload CT ZIP or DICOM Files</h2>
       <div
         {...getRootProps()}
-        className={`cursor-pointer p-6 border-2 border-dashed border-gray-500 rounded bg-gray-700 hover:bg-gray-600 transition ${uploading ? "opacity-50 pointer-events-none" : ""}`}
+        className={`cursor-pointer p-6 border-2 border-dashed border-gray-500 rounded bg-gray-700 hover:bg-gray-600 transition ${
+          uploading ? "opacity-50 pointer-events-none" : ""
+        }`}
       >
         <input {...getInputProps()} disabled={uploading} />
         <p className="text-lg">
-          Drag & drop your <strong>.zip</strong> file here or click to select
+          Drag & drop your <strong>.zip</strong> or <strong>.dcm</strong> file(s) here or click to select
         </p>
       </div>
 
@@ -101,7 +121,10 @@ function UploadScan() {
         <div className="mt-4 text-sm text-blue-300">
           Progress: {progress}%<br />
           <div className="w-full h-2 bg-gray-700 rounded mt-2">
-            <div className="h-2 bg-blue-500 rounded" style={{ width: `${progress}%` }}></div>
+            <div
+              className="h-2 bg-blue-500 rounded"
+              style={{ width: `${progress}%` }}
+            ></div>
           </div>
         </div>
       )}
