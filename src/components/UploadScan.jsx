@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import JSZip from "jszip";
 import { useDropzone } from "react-dropzone";
-import { ref, uploadBytesResumable } from "firebase/storage";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { getAuth } from "firebase/auth";
 import { storage } from "../firebase/config";
 import { v4 as uuidv4 } from "uuid";
@@ -10,68 +11,82 @@ function UploadScan() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
 
-  const onDrop = async (acceptedFiles) => {
-    // Only take the first file (should be .zip)
-    const file = acceptedFiles[0];
-    if (!file || !file.name.endsWith(".zip")) {
-      setStatus("❌ Only ZIP files are allowed.");
-      return;
-    }
-
-    setUploading(true);
-    setStatus("☁️ Uploading ZIP to Firebase Storage...");
-    setProgress(0);
-
-    try {
-      const generatedFilename = `scan_${uuidv4()}.zip`;
-      const auth = getAuth();
-      const user = auth.currentUser;
-      const zipRef = ref(storage, `temp-uploads/${generatedFilename}`);
-
-      const uploadTask = uploadBytesResumable(zipRef, file, {
-        customMetadata: {
-          userId: user ? user.uid : "unknown",
-        },
-      });
-
-      await new Promise((resolve, reject) => {
-        uploadTask.on(
-          "state_changed",
-          (snapshot) => {
-            const percent = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-            setProgress(percent);
-          },
-          (error) => {
-            setUploading(false);
-            setStatus("❌ Upload error: " + error.message);
-            reject(error);
-          },
-          () => {
-            setStatus("✅ Upload complete. AI analysis will begin automatically.");
-            setProgress(100);
-            setUploading(false);
-            resolve();
-          }
-        );
-      });
-
-      // No polling needed—backend triggers everything else.
-    } catch (err) {
-      setStatus(`❌ Upload failed: ${err.message}`);
-      setUploading(false);
-    }
-  };
-
+  // Always .zip for now
   const { getRootProps, getInputProps } = useDropzone({
-    onDrop,
-    multiple: false,
+    onDrop: async (acceptedFiles) => {
+      setUploading(true);
+      setStatus("📦 Zipping files...");
+      setProgress(0);
+
+      try {
+        // Bundle as zip
+        const zip = new JSZip();
+        for (let i = 0; i < acceptedFiles.length; i++) {
+          zip.file(acceptedFiles[i].name, acceptedFiles[i]);
+          setProgress(Math.round(((i + 1) / acceptedFiles.length) * 10));
+        }
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const generatedFilename = `scan_${uuidv4()}.zip`;
+
+        const auth = getAuth();
+        const user = auth.currentUser;
+        const zipRef = ref(storage, `temp-uploads/${generatedFilename}`);
+
+        // Upload with metadata
+        const uploadTask = uploadBytesResumable(zipRef, zipBlob, {
+          customMetadata: {
+            userId: user ? user.uid : "unknown",
+          }
+        });
+
+        await new Promise((resolve, reject) => {
+          uploadTask.on(
+            "state_changed",
+            (snapshot) => {
+              // Progress bar up to 90% during upload
+              const percent = 10 + Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 80);
+              setProgress(percent);
+              setStatus(`☁️ Uploading ZIP... ${percent}%`);
+            },
+            (error) => {
+              setUploading(false);
+              setStatus("❌ Upload error: " + error.message);
+              reject(error);
+            },
+            async () => {
+              // Upload is "complete"—now confirm existence in bucket!
+              setProgress(90);
+              setStatus("⏳ Verifying upload in storage...");
+              try {
+                // This checks if file is actually present and downloadable
+                await getDownloadURL(zipRef);
+                setStatus("✅ Upload complete! File is now in Storage.");
+                setProgress(100);
+                resolve();
+              } catch (err) {
+                setStatus("❌ Upload claimed complete, but not found in bucket: " + err.message);
+                setProgress(0);
+                setUploading(false);
+                reject(err);
+              }
+            }
+          );
+        });
+      } catch (err) {
+        setStatus(`❌ Upload or zipping failed: ${err.message}`);
+        setUploading(false);
+      }
+
+      setUploading(false);
+    },
+    multiple: true,
+    // Accept only .zip for this phase
     accept: { "application/zip": [".zip"] },
-    disabled: uploading,
   });
 
   return (
     <div className="border border-gray-700 rounded p-6 bg-gray-800 text-center">
-      <h2 className="text-xl font-semibold mb-4">📁 Upload CT Scan ZIP</h2>
+      <h2 className="text-xl font-semibold mb-4">📁 Upload CT ZIP File</h2>
       <div
         {...getRootProps()}
         className={`cursor-pointer p-6 border-2 border-dashed border-gray-500 rounded bg-gray-700 hover:bg-gray-600 transition ${uploading ? "opacity-50 pointer-events-none" : ""}`}
