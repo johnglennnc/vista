@@ -14,133 +14,14 @@ import {
 import { getDownloadURL, ref as storageRef } from "firebase/storage";
 import { db, storage } from "./firebase/config";
 import { app } from "./firebase/config";
+import UploadScan from "./components/UploadScan"; // Points to UploadScan.jsx
 
-// --- UploadScan Component (Inline) ---
+// --- Helper Function ---
 function classNames(...classes) {
   return classes.filter(Boolean).join(" ");
 }
 
-function UploadScan() {
-  const fileInputRef = React.useRef(null);
-  const [dragActive, setDragActive] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setDragActive(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    setDragActive(false);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFileSelect(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleFileSelect = (file) => {
-    setSelectedFile(file);
-    setProgress(0);
-    setUploading(true);
-    // Simulate upload progress
-    const interval = setInterval(() => {
-      setProgress((p) => {
-        if (p >= 100) {
-          clearInterval(interval);
-          setUploading(false);
-          return 100;
-        }
-        return p + 10;
-      });
-    }, 150);
-  };
-
-  const handleBrowse = () => {
-    fileInputRef.current.click();
-  };
-
-  const onFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFileSelect(e.target.files[0]);
-    }
-  };
-
-  return (
-    <div>
-      {/* Upload Card */}
-      <div
-        className={classNames(
-          "flex flex-col items-center justify-center p-10 rounded-2xl border-2 border-dashed",
-          dragActive
-            ? "border-cyan-400 bg-cyan-950 bg-opacity-30"
-            : "border-slate-700 bg-slate-800 bg-opacity-60"
-        )}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <input
-          type="file"
-          accept=".zip"
-          className="hidden"
-          ref={fileInputRef}
-          onChange={onFileChange}
-        />
-        <div className="w-20 h-20 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center mb-4 shadow-xl">
-          <svg width="38" height="38" fill="none" viewBox="0 0 24 24">
-            <path
-              d="M12 17v-6m0 0l-2.5 2.5M12 11l2.5 2.5M17.657 16.657A8 8 0 1112 4a7.962 7.962 0 015.657 2.343"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="text-cyan-200"
-            />
-          </svg>
-        </div>
-        <p className="text-lg font-semibold text-cyan-300 mb-2">
-          {dragActive ? "Drop ZIP to upload" : "Drag & Drop CT Scan ZIP Here"}
-        </p>
-        <button
-          onClick={handleBrowse}
-          className="mt-2 px-5 py-2 bg-gradient-to-r from-cyan-500 to-purple-500 rounded-xl font-semibold text-white hover:scale-105 transition-all"
-        >
-          Browse Files
-        </button>
-        {selectedFile && (
-          <div className="mt-5 w-full max-w-xs">
-            <div className="flex justify-between mb-1 text-sm text-slate-400">
-              <span>{selectedFile.name}</span>
-              <span>{progress}%</span>
-            </div>
-            <div className="w-full h-3 bg-slate-700 rounded-full">
-              <div
-                className="h-3 rounded-full bg-gradient-to-r from-cyan-400 to-purple-400 transition-all"
-                style={{ width: `${progress}%` }}
-              ></div>
-            </div>
-            {progress === 100 && (
-              <div className="mt-2 text-green-400 text-sm font-medium">
-                Upload complete!
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-      
-    </div>
-  );
-}
-
 // --- AnalyzeScan Component (Inline) ---
-
 function AnalyzeScan() {
   const [scans, setScans] = useState([]);
   const [selectedScanId, setSelectedScanId] = useState(null);
@@ -282,9 +163,7 @@ function AnalyzeScan() {
   );
 }
 
-
 // --- Main App ---
-
 const auth = getAuth(app);
 
 function App() {
