@@ -77,7 +77,7 @@ function AnalyzeScan() {
       }));
 
       const res = await fetch(
-        "https://analyzeslices-3eolx7hkmq-uc.a.run.app",
+        " https://analyzeslices-3eolx7hkmq-uc.a.run.app", 
         {
           method: "POST",
           headers: {
@@ -275,3 +275,4 @@ function App() {
 }
 
 export default App;
+// for deployment
