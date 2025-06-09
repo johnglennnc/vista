@@ -1,7 +1,6 @@
-// src/App.js
 import React, { useEffect, useState } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import Login from "./components/Login"; // Only Login stays imported
+import Login from "./components/Login";
 import {
   collection,
   query,
@@ -10,11 +9,9 @@ import {
   doc,
   updateDoc
 } from "firebase/firestore";
-
-import { getDownloadURL, ref as storageRef } from "firebase/storage";
-import { db, storage } from "./firebase/config";
+import { db } from "./firebase/config";
 import { app } from "./firebase/config";
-import UploadScan from "./components/UploadScan"; // Points to UploadScan.jsx
+import UploadScan from "./components/UploadScan";
 
 // --- Helper Function ---
 function classNames(...classes) {
@@ -41,29 +38,17 @@ function AnalyzeScan() {
         where("userId", "==", user.uid)
       );
       const querySnapshot = await getDocs(q);
-      const scanList = querySnapshot.docs
-        .map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }))
-       // Show all scans, even if slices are still being processed
-// (you can later add status labels to indicate readiness)
+      const scanList = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
 
-
+      console.log("Fetched scans:", scanList); // Debug log
       setScans(scanList);
     };
 
     fetchScans();
   }, []);
-
-  const blobToBase64 = (blob) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result.split(',')[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  };
 
   const handleAnalyze = async () => {
     if (!selectedScanId) {
@@ -77,44 +62,46 @@ function AnalyzeScan() {
       return;
     }
 
-    setAnalysisResult("🔄 Downloading and encoding slices...");
+    setAnalysisResult("🔄 Sending slices for AI analysis...");
     setLoading(true);
 
     try {
-      const sliceFiles = [];
-      for (const storagePath of scan.slices) {
-        const url = await getDownloadURL(storageRef(storage, storagePath));
-        const response = await fetch(url);
-        const blob = await response.blob();
-        const base64 = await blobToBase64(blob);
-        sliceFiles.push({ name: storagePath.split('/').pop(), base64 });
-      }
-
-      setAnalysisResult("🔄 Sending to AI for analysis...");
-
       const auth = getAuth();
       const user = auth.currentUser;
+      if (!user) throw new Error("User not authenticated");
       const idToken = await user.getIdToken();
 
+      const sliceData = scan.slices.map(path => ({
+        name: path.split('/').pop(),
+        url: path
+      }));
+
       const res = await fetch(
-        "https://us-central1-vista-lifeimaging.cloudfunctions.net/api/analyzeSlices",
+        "https://analyzeslices-3eolx7hkmq-uc.a.run.app",
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${idToken}`,
           },
-          body: JSON.stringify({ slices: sliceFiles }),
+          body: JSON.stringify({ slices: sliceData }),
         }
       );
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Failed to fetch: ${errorText}`);
+      }
+
       const data = await res.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
 
       setAnalysisResult(
         data.results
           ? JSON.stringify(data.results, null, 2)
-          : data.error
-            ? `❌ Error: ${data.error}`
-            : "No result"
+          : "No analysis results returned"
       );
 
       const scanDoc = doc(db, "scans", selectedScanId);
@@ -124,7 +111,7 @@ function AnalyzeScan() {
     } catch (err) {
       setAnalysisResult(`❌ Error: ${err.message}`);
       setLoading(false);
-      console.error(err);
+      console.error("Analysis error:", err);
     }
   };
 
@@ -288,4 +275,3 @@ function App() {
 }
 
 export default App;
-// Allowing clean import
